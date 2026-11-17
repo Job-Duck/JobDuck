@@ -8,8 +8,9 @@ import { recordFollowUp } from '../src/db/follow-ups'
 import { upsertPosting } from '../src/db/postings'
 import { statusActions } from '../web/src/lib/board'
 import {
-  BULK_TARGETS, CLOSE_TARGETS, type DialogScope, dialogScope, effectiveDate, entryDraft, entryLabel, entryPatch,
-  isEntryDate, revertsTo, statusRequest, timelineOrder, undoableEntryId,
+  BULK_TARGETS, CLOSE_TARGETS, type DialogScope, type TimelineItem, dialogScope, effectiveDate, entryDraft, entryLabel,
+  entryPatch, groupLatest, groupNote, groupTimeline, isEntryDate, isTimelineGroup, itemHolds, revertsTo, statusRequest,
+  timelineLabel, timelineOrder, undoableEntryId,
 } from '../web/src/lib/status-entries'
 import type { ApplicationEvent, StageTypes } from '../web/src/lib/types'
 
@@ -142,6 +143,92 @@ describe('timeline helpers', () => {
     expect(entryPatch(original, { date: '2026-03-02', note: 'Old' })).toEqual({ occurred_at: '2026-03-02' })
     expect(entryPatch(original, { date: '2026-03-01', note: ' ' })).toEqual({ note: null })
     expect(entryPatch(original, { date: '', note: 'New' })).toBeNull()
+  })
+})
+
+describe('groupTimeline', () => {
+  const at = (minute: string) => `2026-01-05T16:${minute}:00.000Z`
+  const pendingRun = () => [
+    event(69, { from_status: null, to_status: 'saved', created_at: at('41') }),
+    event(70, { from_status: 'saved', to_status: 'pending', note: 'Stopped at the login wall', created_at: at('41') }),
+    event(71, { from_status: 'pending', to_status: 'pending', note: 'Signed in, questions filled', created_at: at('46') }),
+    event(72, { from_status: 'pending', to_status: 'pending', note: 'Questions submitted', created_at: at('48') }),
+    event(73, { from_status: 'pending', to_status: 'pending', note: 'Final step bounced back', created_at: at('49') }),
+    event(74, { from_status: 'pending', to_status: 'pending', note: 'Resume required', created_at: at('50') }),
+  ]
+  const groupAt = (items: TimelineItem[], index: number) => {
+    const item = items[index]
+    if (!item || !isTimelineGroup(item)) throw new Error(`expected a group at ${index}`)
+    return item
+  }
+  const ids = (items: TimelineItem[]) =>
+    items.map((item) => (isTimelineGroup(item) ? [item.head.id, ...item.updates.map((update) => update.id)] : item.id))
+
+  test('a pending head and its pending → pending updates collapse to one group, updates oldest first', () => {
+    const items = groupTimeline(pendingRun())
+    expect(ids(items)).toEqual([[70, 71, 72, 73, 74], 69])
+    const group = groupAt(items, 0)
+    expect(group.updates).toHaveLength(4)
+    expect(groupLatest(group).id).toBe(74)
+  })
+
+  test('the group shows the latest reason, falling back to an earlier one when the latest has none', () => {
+    const group = groupAt(groupTimeline(pendingRun()), 0)
+    expect(groupNote(group)).toBe('Resume required')
+    expect(groupNote({ head: group.head, updates: [...group.updates.slice(0, 3), event(75, { from_status: 'pending', to_status: 'pending' })] }))
+      .toBe('Final step bounced back')
+  })
+
+  test('the run ends at the next status change, which stays its own entry', () => {
+    const events = [...pendingRun(), event(75, { from_status: 'pending', to_status: 'applied', note: 'Applied', created_at: at('53') })]
+    expect(ids(groupTimeline(events))).toEqual([75, [70, 71, 72, 73, 74], 69])
+    expect(undoableEntryId(events)).toBe(75)
+  })
+
+  test('undo still targets the newest status event, and the group holding it gets the Undo button', () => {
+    const events = pendingRun()
+    const undoable = undoableEntryId(events)
+    expect(undoable).toBe(74)
+    const items = groupTimeline(events)
+    const group = groupAt(items, 0)
+    expect(itemHolds(group, undoable)).toBe(true)
+    expect(items.slice(1).some((item) => itemHolds(item, undoable))).toBe(false)
+    expect(itemHolds(group, null)).toBe(false)
+  })
+
+  test('follow-up rows do not break a run and are left as their own entries', () => {
+    const events = [
+      ...pendingRun().slice(0, 3),
+      event(80, { from_status: 'pending', to_status: 'pending', kind: 'follow_up_sent', created_at: at('47') }),
+      event(81, { from_status: 'pending', to_status: 'pending', note: 'Later update', created_at: at('55') }),
+    ]
+    expect(ids(groupTimeline(events))).toEqual([[70, 71, 81], 80, 69])
+  })
+
+  test('a pending → pending row without a head stays alone, labelled as a reason update', () => {
+    const orphan = event(5, { from_status: 'pending', to_status: 'pending', note: 'Still waiting' })
+    expect(groupTimeline([orphan])).toEqual([orphan])
+    expect(timelineLabel(orphan)).toBe('Pending reason updated')
+    expect(groupTimeline(pendingRun()).flatMap((item) => (isTimelineGroup(item) ? [item.head, ...item.updates] : [item]))
+      .map(timelineLabel)).not.toContain('pending → pending')
+  })
+
+  test('a pending head with no updates stays a plain entry', () => {
+    const events = pendingRun().slice(0, 2)
+    expect(groupTimeline(events)).toEqual(timelineOrder(events))
+  })
+
+  test('events outside a pending run are untouched and keep timelineOrder', () => {
+    const events = [
+      event(1, { created_at: '2026-01-10T00:00:00.000Z' }),
+      event(2, { occurred_at: '2025-12-01' }),
+      event(3, { stage_type: 'technical', to_status: 'interviewing', scheduled_at: '2026-02-01' }),
+      event(4, { occurred_at: '2026-01-20' }),
+      event(5, { occurred_at: '2026-01-20' }),
+    ]
+    expect(groupTimeline(events)).toEqual(timelineOrder(events))
+    expect(timelineLabel(event(1))).toBe('saved → applied')
+    expect(timelineLabel(event(9, { from_status: null, to_status: 'saved' }))).toBe('Created as saved')
   })
 })
 
