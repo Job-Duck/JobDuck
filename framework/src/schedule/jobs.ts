@@ -212,33 +212,64 @@ export function crontabLine(spec: JobSpec): string {
   return `${minute} ${hour} * * * ${cronSafe(command)} ${cronTag(spec.home)}`
 }
 
-const withoutJob = (crontab: string, home: string) =>
-  crontab.split('\n').filter((line) => line !== '' && !line.endsWith(cronTag(home)))
+/** Each line with its own line ending, so a crontab splits and rejoins byte-for-byte. */
+const crontabSegments = (crontab: string) => crontab.match(/[^\n]*\n|[^\n]+$/g) ?? []
+const lineOf = (segment: string) => segment.replace(/\r?\n$/, '')
+const isJobLine = (segment: string, home: string) => lineOf(segment).endsWith(cronTag(home))
 
-export const hasCrontabJob = (crontab: string, home: string) => crontab.split('\n').some((line) => line.endsWith(cronTag(home)))
+/** The crontab without Job Duck's line for this home; every other byte (blank lines, comments, endings) is kept. */
+export const withoutCrontabJob = (crontab: string, home: string) =>
+  crontabSegments(crontab).filter((segment) => !isJobLine(segment, home)).join('')
 
-export const currentCrontabLine = (crontab: string, home: string) =>
-  crontab.split('\n').find((line) => line.endsWith(cronTag(home)))
-
-function crontabWrite(lines: string[]): JobCommand {
-  return { argv: ['crontab', '-'], input: lines.length === 0 ? '' : `${lines.join('\n')}\n` }
+/** The crontab with Job Duck's line for this home replaced by `line`, which goes last. */
+export function withCrontabJob(crontab: string, home: string, line: string): string {
+  const rest = withoutCrontabJob(crontab, home)
+  return `${rest}${rest === '' || rest.endsWith('\n') ? '' : '\n'}${line}\n`
 }
+
+export const hasCrontabJob = (crontab: string, home: string) => crontabSegments(crontab).some((segment) => isJobLine(segment, home))
+
+export const currentCrontabLine = (crontab: string, home: string) => {
+  const segment = crontabSegments(crontab).find((candidate) => isJobLine(candidate, home))
+  return segment === undefined ? undefined : lineOf(segment)
+}
+
+const crontabWrite = (input: string): JobCommand => ({ argv: ['crontab', '-'], input })
 
 function crontabInstall(spec: JobSpec, crontab: string): JobPlan {
   return {
     kind: 'crontab', name: jobName('crontab', spec.home), write: [], remove: [],
-    commands: [crontabWrite([...withoutJob(crontab, spec.home), crontabLine(spec)])],
+    commands: [crontabWrite(withCrontabJob(crontab, spec.home, crontabLine(spec)))],
   }
 }
 
 function crontabRemove(spec: JobSpec, crontab: string): JobPlan {
   return {
     kind: 'crontab', name: jobName('crontab', spec.home), write: [], remove: [],
-    commands: [crontabWrite(withoutJob(crontab, spec.home))],
+    commands: [crontabWrite(withoutCrontabJob(crontab, spec.home))],
   }
 }
 
 export const CRONTAB_LIST = ['crontab', '-l']
+
+/** What `crontab -l` said: the user's crontab, none yet, no crontab command, or a failure to read it. */
+export type CrontabRead =
+  | { kind: 'text'; text: string }
+  | { kind: 'none' }
+  | { kind: 'unavailable' }
+  | { kind: 'error'; message: string }
+
+/**
+ * Only cron's own "no crontab for <user>" means the crontab is empty, and exit 127 means there is no crontab command.
+ * Any other failure is an error: writing a crontab Job Duck could not read would replace the user's lines.
+ */
+export function readCrontab(result: { code: number; stdout: string; stderr: string }): CrontabRead {
+  if (result.code === 0) return { kind: 'text', text: result.stdout }
+  if (/\bno crontab for\b/i.test(result.stderr)) return { kind: 'none' }
+  if (result.code === 127) return { kind: 'unavailable' }
+  const detail = result.stderr.trim() || result.stdout.trim()
+  return { kind: 'error', message: `crontab -l failed (exit ${result.code})${detail ? `: ${detail}` : ''}` }
+}
 
 // Task Scheduler (Windows)
 
@@ -283,8 +314,10 @@ export interface PlatformState {
   platform: SchedulePlatform
   /** Linux: `systemctl --user` answers. */
   systemd?: boolean
-  /** Linux: the current `crontab -l` (empty when there is none). */
+  /** Linux: the current crontab, '' when there is none or no crontab command (never set from a failed read). */
   crontab?: string
+  /** Linux: a crontab command exists, so the crontab fallback can be written. */
+  crontabAvailable?: boolean
 }
 
 export function linuxKind(state: PlatformState): 'systemd' | 'crontab' {
@@ -295,7 +328,11 @@ export function installPlan(spec: JobSpec, state: PlatformState): JobPlan {
   parseTime(spec.time)
   if (state.platform === 'darwin') return launchdInstall(spec)
   if (state.platform === 'win32') return schtasksInstall(spec)
-  return linuxKind(state) === 'systemd' ? systemdInstall(spec) : crontabInstall(spec, state.crontab ?? '')
+  if (linuxKind(state) === 'systemd') return systemdInstall(spec)
+  if (state.crontabAvailable === false) {
+    throw new Error('neither systemctl --user nor crontab is available, so no daily job can be installed')
+  }
+  return crontabInstall(spec, state.crontab ?? '')
 }
 
 /** Removal plans for every job kind this platform may hold. Linux returns systemd and crontab when both exist. */

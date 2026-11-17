@@ -13,9 +13,11 @@ import { upsertPosting } from '../src/db/postings'
 import { ABANDONED_ERROR, type ScheduledRun } from '../src/db/scheduled-runs'
 import { HOST_IDS, hostById } from '../src/hosts'
 import { dbPath, ensureHome, permissionsPath } from '../src/paths'
-import { jobName, nextRunAt, scheduleHash } from '../src/schedule/jobs'
+import {
+  jobName, launchAgentPath, nextRunAt, readCrontab, scheduleHash, withCrontabJob, withoutCrontabJob,
+} from '../src/schedule/jobs'
 import { MAX_WINDOW_DAYS, postedWithinDays, schedulePrompt } from '../src/schedule/run'
-import type { Exec, ExecResult, HostRunner, ScheduleFs } from '../src/schedule/system'
+import { type Exec, type ExecResult, type HostRunner, type ScheduleFs, pathOf } from '../src/schedule/system'
 import { SETTINGS_GROUPS } from '../web/src/lib/forms'
 import { runCounts as cardCounts, runTimeLine, scheduleLine, showScheduleCard } from '../web/src/lib/schedule'
 
@@ -202,11 +204,32 @@ describe('install', () => {
     expect(schedule().enabled).toBe(false)
   })
 
-  test('a failing scheduler command leaves [schedule] off', async () => {
+  test('a failing scheduler command leaves [schedule] off and removes the file install just wrote', async () => {
     const exec = fakeExec((line) => (line.startsWith('launchctl bootstrap') ? { code: 5, stderr: 'Bootstrap failed' } : {}))
-    const { options, err } = deps('darwin', exec, memoryFs())
+    const fs = memoryFs()
+    const { options, err } = deps('darwin', exec, fs)
     expect(await runScheduleInstall(options)).toBe(1)
     expect(err.at(-1)).toContain('Bootstrap failed')
+    expect(err.at(-1)).toContain('the files it wrote were put back')
+    expect(fs.files.size).toBe(0)
+    expect(schedule().enabled).toBe(false)
+  })
+
+  test('a failing scheduler command puts back a file that was there before install', async () => {
+    const old = '<?xml version="1.0"?><plist version="1.0"><dict/></plist>\n'
+    const fs = memoryFs({ [launchAgentPath({ home: box.home, workspace: box.workspace, time: '08:00', program: PROGRAM, userHome: box.userHome })]: old })
+    const exec = fakeExec((line) => (line.startsWith('launchctl bootstrap') ? { code: 5 } : {}))
+    const { options } = deps('darwin', exec, fs)
+    expect(await runScheduleInstall(options)).toBe(1)
+    expect([...fs.files.values()]).toEqual([old])
+  })
+
+  test('a failing systemctl removes both units install wrote', async () => {
+    const exec = fakeExec((line) => (line.includes('enable --now') ? { code: 1, stderr: 'Failed to enable unit' } : {}))
+    const fs = memoryFs()
+    const { options } = deps('linux', exec, fs)
+    expect(await runScheduleInstall(options)).toBe(1)
+    expect(fs.files.size).toBe(0)
     expect(schedule().enabled).toBe(false)
   })
 
@@ -215,6 +238,112 @@ describe('install', () => {
     expect(await runScheduleInstall(options)).toBe(0)
     expect(schedule().host).toBe('claude')
   })
+})
+
+describe('crontab safety', () => {
+  const NO_SYSTEMD = { code: 1, stderr: 'Failed to connect to bus' }
+  const crontabExec = (list: Partial<ExecResult>) => fakeExec((line) => {
+    if (line === 'systemctl --user show-environment') return NO_SYSTEMD
+    if (line === 'crontab -l') return list
+    return {}
+  })
+  const writes = (exec: { calls: Call[] }) => exec.calls.filter((call) => call.argv.join(' ') === 'crontab -')
+
+  test('readCrontab: only "no crontab for <user>" is empty, 127 is no crontab command, anything else is an error', () => {
+    expect(readCrontab({ code: 0, stdout: 'a\n', stderr: '' })).toEqual({ kind: 'text', text: 'a\n' })
+    expect(readCrontab({ code: 1, stdout: '', stderr: 'no crontab for user\n' })).toEqual({ kind: 'none' })
+    expect(readCrontab({ code: 1, stdout: '', stderr: 'crontab: no crontab for user\n' })).toEqual({ kind: 'none' })
+    expect(readCrontab({ code: 127, stdout: '', stderr: 'Executable not found in $PATH: "crontab"' })).toEqual({ kind: 'unavailable' })
+    for (const result of [
+      { code: 1, stdout: '', stderr: "crontab: can't open your crontab file: Permission denied" },
+      { code: 1, stdout: '', stderr: '' },
+      { code: 2, stdout: '', stderr: 'crontab: unexpected error' },
+    ]) expect(readCrontab(result).kind).toBe('error')
+  })
+
+  for (const command of ['install', 'remove'] as const) {
+    test(`${command} aborts and writes nothing when crontab -l fails for another reason`, async () => {
+      setSchedule({ enabled: true })
+      const before = readFileSync(permissionsPath(box.home), 'utf8')
+      const exec = crontabExec({ code: 1, stderr: "crontab: can't open your crontab file: Permission denied" })
+      const fs = memoryFs()
+      const { options, err } = deps('linux', exec, fs)
+      for (const dryRun of [true, false]) {
+        const run = command === 'install' ? runScheduleInstall : runScheduleRemove
+        expect(await run({ ...options, dryRun })).toBe(1)
+        expect(err.at(-1)).toContain('crontab -l failed (exit 1): crontab: can\'t open your crontab file: Permission denied')
+      }
+      expect(writes(exec)).toEqual([])
+      expect(mutating(exec)).toEqual([])
+      expect(fs.files.size).toBe(0)
+      expect(readFileSync(permissionsPath(box.home), 'utf8')).toBe(before)
+    })
+  }
+
+  test('"no crontab for <user>" installs a crontab holding only the Job Duck line', async () => {
+    const exec = crontabExec({ code: 1, stderr: 'no crontab for user' })
+    const { options } = deps('linux', exec, memoryFs())
+    expect(await runScheduleInstall(options)).toBe(0)
+    const input = writes(exec)[0]!.input!
+    expect(input.split('\n')).toHaveLength(2)
+    expect(input).toEndWith(`# ${jobName('crontab', box.home)}\n`)
+  })
+
+  test('without systemd or a crontab command install refuses; with systemd it does not need crontab', async () => {
+    const missing = { code: 127, stderr: 'Executable not found in $PATH: "crontab"' }
+    const noCron = crontabExec(missing)
+    const fs = memoryFs()
+    const { options, err } = deps('linux', noCron, fs)
+    expect(await runScheduleInstall(options)).toBe(1)
+    expect(err.at(-1)).toContain('neither systemctl --user nor crontab is available')
+    expect(mutating(noCron)).toEqual([])
+    expect(schedule().enabled).toBe(false)
+
+    const systemd = fakeExec((line) => (line === 'crontab -l' ? missing : {}))
+    expect(await runScheduleInstall({ ...options, exec: systemd })).toBe(0)
+    expect(fs.files.size).toBe(2)
+  })
+
+  test('every line that is not Job Duck\'s is kept byte-for-byte, blank lines, CRLF and a missing final newline included', async () => {
+    const tag = `# ${jobName('crontab', box.home)}`
+    const head = 'SHELL=/bin/sh\n\n# nightly backup\n0 1 * * * /usr/bin/true\r\n\n\n'
+    const tail = '\t\n30 2 * * 0 /usr/bin/false # keep me'
+    const stale = `0 6 * * * old command ${tag}\n`
+    const crontab = `${head}${stale}${tail}`
+    expect(withoutCrontabJob(crontab, box.home)).toBe(`${head}${tail}`)
+    expect(withCrontabJob(crontab, box.home, `NEW ${tag}`)).toBe(`${head}${tail}\nNEW ${tag}\n`)
+    expect(withCrontabJob('', box.home, `NEW ${tag}`)).toBe(`NEW ${tag}\n`)
+    expect(withoutCrontabJob(`a\n${stale}`, box.home)).toBe('a\n')
+    const other = `0 6 * * * other ${`# ${jobName('crontab', `${box.home}-other`)}`}\n`
+    expect(withoutCrontabJob(`${other}${stale}`, box.home)).toBe(other)
+
+    let current = crontab
+    const exec = fakeExec((line) => {
+      if (line === 'systemctl --user show-environment') return NO_SYSTEMD
+      if (line === 'crontab -l') return { stdout: current }
+      return {}
+    })
+    const { options } = deps('linux', exec, memoryFs())
+    expect(await runScheduleInstall(options)).toBe(0)
+    current = writes(exec).at(-1)!.input!
+    expect(current.startsWith(`${head}${tail}\n`)).toBe(true)
+    expect(current.match(new RegExp(tag, 'g'))).toHaveLength(1)
+    expect(await runScheduleRemove(options)).toBe(0)
+    expect(writes(exec).at(-1)!.input).toBe(`${head}${tail}\n`)
+  })
+
+  test('status says the job is unknown when the crontab cannot be read', async () => {
+    const { options, out } = deps('linux', crontabExec({ code: 1, stderr: 'Permission denied' }), memoryFs())
+    expect(await runScheduleStatus(options)).toBe(0)
+    expect(out).toContain('Job: unknown (crontab -l failed (exit 1): Permission denied)')
+  })
+})
+
+test('pathOf reads PATH whatever its case, preferring PATH', () => {
+  expect(pathOf({ Path: 'C:\\bin' })).toBe('C:\\bin')
+  expect(pathOf({ path: '/usr/bin' })).toBe('/usr/bin')
+  expect(pathOf({ PATH: '/opt/bin', Path: 'C:\\bin' })).toBe('/opt/bin')
+  expect(pathOf({})).toBe('')
 })
 
 describe('remove and status', () => {

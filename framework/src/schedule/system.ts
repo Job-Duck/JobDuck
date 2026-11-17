@@ -58,9 +58,14 @@ export const systemFs: ScheduleFs = {
   remove: (path) => rmSync(path, { force: true }),
 }
 
+/** PATH from an environment, matched case-insensitively: Windows spells it `Path`. */
+export function pathOf(env: Record<string, string | undefined>): string {
+  return env.PATH ?? Object.entries(env).find(([key]) => key.toUpperCase() === 'PATH')?.[1] ?? ''
+}
+
 export const spawnHost: HostRunner = async (argv, options) => {
   const [command, ...args] = argv
-  const binary = command === undefined ? null : Bun.which(command, { PATH: options.env.PATH ?? '' })
+  const binary = command === undefined ? null : Bun.which(command, { PATH: pathOf(options.env) })
   if (binary === null) throw new Error(`${command ?? '(no command)'} is not on PATH`)
   mkdirSync(dirname(options.logPath), { recursive: true, mode: 0o700 })
   const log = openSync(options.logPath, 'a', 0o600)

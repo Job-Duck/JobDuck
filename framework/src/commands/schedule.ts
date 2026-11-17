@@ -7,7 +7,7 @@ import { type ScheduledRun, lastRun, lastSuccessfulRun } from '../db/scheduled-r
 import { hostById } from '../hosts'
 import { NoHomeError, dbPath, discoverHome, permissionsPath, resolveWorkspace } from '../paths'
 import {
-  CRONTAB_LIST, type JobCommand, type JobKind, type JobPlan, type JobSpec, type PlatformState, SYSTEMD_PROBE,
+  CRONTAB_LIST, type JobCommand, type JobKind, type JobPlan, type JobSpec, type PlatformState, SYSTEMD_PROBE, readCrontab,
   type SchedulePlatform, crontabLine, currentCrontabLine, installPlan, jobName, launchAgentPath, launchdPlist, nextRunAt,
   removePlans, schtasksQuery, systemdUnits, unitPaths, windowsScript, windowsScriptPath,
 } from '../schedule/jobs'
@@ -94,10 +94,17 @@ function contextOrReport(options: ScheduleOptions): Context | null {
   return null
 }
 
-function platformState(ctx: Context): PlatformState {
+/** The platform's scheduler state, or the error that must stop install and remove before anything is written. */
+function platformState(ctx: Context): PlatformState | { error: string } {
   if (ctx.platform !== 'linux') return { platform: ctx.platform }
-  const listed = ctx.exec(CRONTAB_LIST)
-  return { platform: 'linux', systemd: ctx.exec(SYSTEMD_PROBE).code === 0, crontab: listed.code === 0 ? listed.stdout : '' }
+  const crontab = readCrontab(ctx.exec(CRONTAB_LIST))
+  if (crontab.kind === 'error') return { error: `${crontab.message}; nothing was changed, so your crontab is untouched` }
+  return {
+    platform: 'linux',
+    systemd: ctx.exec(SYSTEMD_PROBE).code === 0,
+    crontab: crontab.kind === 'text' ? crontab.text : '',
+    crontabAvailable: crontab.kind !== 'unavailable',
+  }
 }
 
 const word = (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : JSON.stringify(arg))
@@ -124,10 +131,20 @@ function execute(ctx: Context, plan: JobPlan): string | null {
     if (result.code === 0 || command.allowFailure) return null
     return `${commandLine(command)} failed (exit ${result.code})${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`
   }
-  for (const file of plan.write) ctx.fs.write(file.path, file.content)
+  const written: { path: string; before: string | null }[] = []
+  for (const file of plan.write) {
+    written.push({ path: file.path, before: ctx.fs.read(file.path) })
+    ctx.fs.write(file.path, file.content)
+  }
   for (const command of plan.commands) {
     const failed = step(command)
-    if (failed) return failed
+    if (failed) {
+      for (const { path, before } of written.reverse()) {
+        if (before === null) ctx.fs.remove(path)
+        else ctx.fs.write(path, before)
+      }
+      return written.length > 0 ? `${failed}; the files it wrote were put back` : failed
+    }
   }
   for (const path of plan.remove) ctx.fs.remove(path)
   for (const command of plan.afterRemove ?? []) {
@@ -163,7 +180,18 @@ export async function runScheduleInstall(options: InstallOptions = {}): Promise<
   if (schedule.mode === 'find_only' && !modules.find) ctx.err('Note: the find module is off, so scheduled runs stop at its gate until you turn it on.')
   if (schedule.mode === 'apply' && !modules.apply) ctx.err('Note: the apply module is off, so scheduled runs stop at its gate until you turn it on.')
 
-  const plan = installPlan(ctx.spec(schedule.time), platformState(ctx))
+  const state = platformState(ctx)
+  if ('error' in state) {
+    ctx.err(state.error)
+    return 1
+  }
+  let plan: JobPlan
+  try {
+    plan = installPlan(ctx.spec(schedule.time), state)
+  } catch (error) {
+    ctx.err(message(error))
+    return 1
+  }
   ctx.out(summaryLine(schedule))
   ctx.out(`Job: ${plan.kind} ${plan.name}`)
   describe(plan, options.dryRun ?? false, ctx.out)
@@ -203,6 +231,10 @@ export async function runScheduleRemove(options: ScheduleOptions = {}): Promise<
   const path = permissionsPath(ctx.home)
   const stored = readStoredPermissions(path)
   const state = platformState(ctx)
+  if ('error' in state) {
+    ctx.err(state.error)
+    return 1
+  }
   const { present, unitsPresent } = installed(ctx, state)
   const plans = present ? removePlans(ctx.spec(stored.permissions.schedule.time), { ...state, unitsPresent }) : []
   if (plans.length === 0) ctx.out('No OS job is installed for this Job Duck home.')
@@ -237,7 +269,7 @@ export async function runScheduleRemove(options: ScheduleOptions = {}): Promise<
 
 export interface ScheduleStatus {
   settings: EffectiveSchedule
-  job: { kind: JobKind | null; name: string | null; installed: boolean; current: boolean | null }
+  job: { kind: JobKind | null; name: string | null; installed: boolean; current: boolean | null; error?: string }
   next_run_at: string | null
   last_run: ScheduledRun | null
 }
@@ -259,8 +291,9 @@ function jobState(ctx: Context, schedule: EffectiveSchedule): ScheduleStatus['jo
     const units = systemdUnits(spec)
     return { kind: 'systemd', name: jobName('systemd', ctx.home), installed: true, current: timer === units.timer && ctx.fs.read(paths.service) === units.service }
   }
-  const listed = ctx.exec(CRONTAB_LIST)
-  const line = listed.code === 0 ? currentCrontabLine(listed.stdout, ctx.home) : undefined
+  const crontab = readCrontab(ctx.exec(CRONTAB_LIST))
+  if (crontab.kind === 'error') return { kind: null, name: null, installed: false, current: null, error: crontab.message }
+  const line = crontab.kind === 'text' ? currentCrontabLine(crontab.text, ctx.home) : undefined
   if (line !== undefined) return { kind: 'crontab', name: jobName('crontab', ctx.home), installed: true, current: line === crontabLine(spec) }
   return { kind: null, name: null, installed: false, current: null }
 }
@@ -302,7 +335,8 @@ export async function runScheduleStatus(options: ScheduleOptions = {}): Promise<
   }
   ctx.out(summaryLine(settings))
   ctx.out(`Enabled: ${settings.enabled ? 'yes' : 'no ([schedule] enabled = false pauses runs)'}`)
-  ctx.out(job.installed ? `Job: ${job.kind} ${job.name} installed` : 'Job: not installed (jobduck schedule install adds it)')
+  if (job.error) ctx.out(`Job: unknown (${job.error})`)
+  else ctx.out(job.installed ? `Job: ${job.kind} ${job.name} installed` : 'Job: not installed (jobduck schedule install adds it)')
   if (job.current === false) ctx.out('The installed job differs from [schedule]: run jobduck schedule install again to update it.')
   ctx.out(`Next run: ${next ? localStamp(next) : 'none'}`)
   ctx.out(status.last_run ? runLine(status.last_run) : 'Last run: none yet')
