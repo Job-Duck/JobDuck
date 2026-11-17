@@ -55,7 +55,7 @@ test('permissions template parses with every module off and safe defaults', () =
   const permissions = loadPermissions()
   for (const name of MODULES) expect(permissions.modules[name]).toBe(false)
   expect(permissions.apply).toEqual(SAFE_APPLY)
-  expect(permissions.track).toEqual({ sync_url: '', sync_token: '', auto_apply_interview_signals: false })
+  expect(permissions.track).toEqual({ sync_url: '', sync_token: '', auto_apply_interview_signals: false, auto_sync_minutes: 15 })
   expect(permissions.cv).toEqual({ page_limit: 2 })
 })
 
@@ -164,6 +164,19 @@ test('auto_apply_interview_signals defaults to false, parses true and keeps its 
   expect(() => parsePermissions('[track]\nauto_apply_interview_signals = "yes"\n')).toThrow()
   const template = readFileSync(join(import.meta.dir, '..', 'templates', 'permissions.toml'), 'utf8')
   expect(template).toMatch(/^auto_apply_interview_signals = false +# record synced interview/m)
+})
+
+test('auto_sync_minutes defaults to 15, 0 parses as off, and negatives or fractions are refused', () => {
+  expect(parsePermissions('').track.auto_sync_minutes).toBe(15)
+  expect(parsePermissions('[track]\nauto_sync_minutes = 0\n').track.auto_sync_minutes).toBe(0)
+  expect(parsePermissions('[track]\nauto_sync_minutes = 60\n').track.auto_sync_minutes).toBe(60)
+  expect(() => parsePermissions('[track]\nauto_sync_minutes = -1\n')).toThrow()
+  expect(() => parsePermissions('[track]\nauto_sync_minutes = 1.5\n')).toThrow()
+  const text = serializePermissions(parsePermissions('[track]\nauto_sync_minutes = 0\n'))
+  expect(text).toMatch(/^auto_sync_minutes = 0 {2}# while jobduck dashboard runs/m)
+  const template = readFileSync(join(import.meta.dir, '..', 'templates', 'permissions.toml'), 'utf8')
+  expect(template).toMatch(/^auto_sync_minutes = 15 +# while jobduck dashboard runs/m)
+  expect(parsePermissions(template).track.auto_sync_minutes).toBe(15)
 })
 
 test('profile template parses front matter and keeps the body', () => {

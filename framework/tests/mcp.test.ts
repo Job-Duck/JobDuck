@@ -110,7 +110,7 @@ test('get_profile and get_permissions read the home files', async () => {
   const all = await data('get_permissions')
   expect(all.modules.track).toBe(false)
   expect(await data('get_permissions', { module: 'track' })).toEqual({
-    module: 'track', enabled: false, settings: { sync_url: '', sync_token: '', auto_apply_interview_signals: false },
+    module: 'track', enabled: false, settings: { sync_url: '', sync_token: '', auto_apply_interview_signals: false, auto_sync_minutes: 15 },
   })
   enableTrack()
   expect((await data('get_permissions', { module: 'track' })).enabled).toBe(true)

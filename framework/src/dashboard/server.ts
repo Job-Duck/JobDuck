@@ -7,6 +7,7 @@ import { migrate } from '../db/migrate'
 import { dbPath, ensureHome, jobduckHome } from '../paths'
 import { AGENT_PATH, AUGMENT_PATH, type Agent, type AgentEvent, type AgentOptions, createAgent, parseAugmentBody } from './agent'
 import { ApiError, INBOX_MAX_BODY_BYTES, INBOX_PATH, handleApi } from './api'
+import { type DashboardSyncOverrides, SYNC_PATH, createDashboardSync, handleSync } from './sync'
 
 export const DASHBOARD_HOST = '127.0.0.1'
 export const DASHBOARD_HEADER = 'x-jobduck-dashboard'
@@ -21,6 +22,8 @@ export interface DashboardOptions {
   view?: DashboardView
   out?: (line: string) => void
   agent?: AgentOptions
+  /** Injected fetch and timers for the auto-sync (tests). */
+  sync?: DashboardSyncOverrides
 }
 
 export const DASHBOARD_VIEWS = ['applications', 'profile', 'facts', 'settings', 'welcome'] as const
@@ -159,6 +162,7 @@ export async function startDashboard(options: DashboardOptions = {}): Promise<Da
   const db = openDb(dbPath(home))
   migrate(db)
   const agent = createAgent({ home, workspace: options.workspace ?? process.cwd(), options: options.agent })
+  const sync = createDashboardSync({ ...options.sync, db, home, out })
 
   let origin = ''
   let allowedHosts = new Set<string>()
@@ -186,7 +190,12 @@ export async function startDashboard(options: DashboardOptions = {}): Promise<Da
       if (url.pathname === AGENT_PATH || url.pathname === AUGMENT_PATH) return await handleAgent(req, res, method, url.pathname, agent)
       const limit = url.pathname === INBOX_PATH ? INBOX_MAX_BODY_BYTES : MAX_BODY_BYTES
       const body = MUTATIONS.has(method) ? parseJson(await readBody(req, limit)) : undefined
+      if (url.pathname === SYNC_PATH) {
+        const result = await handleSync(sync, method)
+        return sendJson(res, result.status, result.body)
+      }
       const result = handleApi({ db, home, workspace: options.workspace }, { method, path: url.pathname, query: url.searchParams, body })
+      if (url.pathname === '/api/permissions' && method === 'PUT' && result.status === 200) sync.refresh()
       sendJson(res, result.status, result.body)
     } catch (error) {
       if (error instanceof ApiError) return sendJson(res, error.status, { error: error.message })
@@ -213,6 +222,7 @@ export async function startDashboard(options: DashboardOptions = {}): Promise<Da
   allowedOrigins = new Set([...allowedHosts].map(host => `http://${host}`))
   const page = pageUrl(origin, options.view)
   if (options.open ?? true) openBrowser(page, () => out(`Could not open a browser; visit ${page}`))
+  sync.start()
 
   let closed = false
   return {
@@ -222,6 +232,7 @@ export async function startDashboard(options: DashboardOptions = {}): Promise<Da
     close: () => new Promise<void>((resolve) => {
       if (closed) return resolve()
       closed = true
+      sync.stop()
       agent.stop()
       server.close(() => {
         db.close()

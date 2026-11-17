@@ -18,7 +18,8 @@ import { bulkSummary } from '@/lib/bulk'
 import { FOLLOW_UPS_PATH } from '@/lib/follow-ups'
 import { statusLabel } from '@/lib/format'
 import { BULK_TARGETS, type DialogScope, type StatusEntry, statusRequest } from '@/lib/status-entries'
-import type { ApplicationRow, FollowUps, Outcome, StageTypes, Summary } from '@/lib/types'
+import { SYNC_PATH } from '@/lib/sync'
+import type { ApplicationRow, FollowUps, Outcome, StageTypes, Summary, SyncStatus } from '@/lib/types'
 import { ApplicationBoard } from '@/views/applications/application-board'
 import { ApplicationList } from '@/views/applications/application-list'
 import { ApplicationSheet } from '@/views/applications/application-sheet'
@@ -26,6 +27,7 @@ import { FollowUpsCard } from '@/views/applications/follow-ups-card'
 import { OutcomeItem } from '@/views/applications/outcome-item'
 import { SignalItem } from '@/views/applications/signal-item'
 import { SelectionToolbar } from '@/views/applications/selection-toolbar'
+import { SyncStatusBar } from '@/views/applications/sync-status'
 import { StatusDialog, type StatusDialogRequest, sendStatus } from '@/views/applications/status-dialog'
 
 interface ApplicationsViewProps {
@@ -112,6 +114,7 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
   const [outcomes, setOutcomes] = useState<Outcome[]>([])
   const [signals, setSignals] = useState<Outcome[]>([])
   const [followUps, setFollowUps] = useState<FollowUps | null>(null)
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set())
@@ -126,6 +129,7 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
   const refresh = useCallback(async () => {
     try {
       void fetchJSON<FollowUps>(FOLLOW_UPS_PATH).then(setFollowUps, () => setFollowUps(null))
+      void fetchJSON<SyncStatus>(SYNC_PATH).then(setSyncStatus, () => setSyncStatus(null))
       const [nextSummary, nextRows, nextOutcomes, nextSignals] = await Promise.all([
         fetchJSON<Summary>('/api/summary'),
         fetchJSON<ApplicationRow[]>(applicationsPath({ status: filter, q, limit: APPLICATIONS_FETCH_LIMIT })),
@@ -208,6 +212,11 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
     }
     flash(`${title}: ${row.company}`)
     setDialog(null)
+    await refresh()
+  }
+
+  const synced = async (next: SyncStatus) => {
+    setSyncStatus(next)
     await refresh()
   }
 
@@ -408,6 +417,8 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
           </Button>
         </div>
       )}
+
+      <SyncStatusBar status={syncStatus} onSynced={synced} />
 
       {signals.length > 0 && (
         <SectionCard
