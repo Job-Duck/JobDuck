@@ -6,6 +6,7 @@ import migration005 from './db/migrations/005_posting_fields.sql' with { type: '
 import migration006 from './db/migrations/006_event_dates.sql' with { type: 'text' }
 import migration007 from './db/migrations/007_follow_ups.sql' with { type: 'text' }
 import migration008 from './db/migrations/008_outcome_kinds.sql' with { type: 'text' }
+import migration009 from './db/migrations/009_scheduled_runs.sql' with { type: 'text' }
 import dashboardApp from './dashboard/public/app.js' with { type: 'text' }
 import dashboardIndex from './dashboard/public/index.html' with { type: 'text' }
 import dashboardStyle from './dashboard/public/style.css' with { type: 'text' }
@@ -63,6 +64,7 @@ export const MIGRATIONS: { name: string; sql: string }[] = [
   { name: '006_event_dates.sql', sql: migration006 },
   { name: '007_follow_ups.sql', sql: migration007 },
   { name: '008_outcome_kinds.sql', sql: migration008 },
+  { name: '009_scheduled_runs.sql', sql: migration009 },
 ]
 
 export const DASHBOARD: Record<string, string> = {

@@ -7,6 +7,7 @@ import { parseProfile } from '../src/config/profile'
 import { skillFrontMatter } from '../src/hosts'
 import { EXTRACTED_KEYS, TOOL_NAMES } from '../src/mcp/tools'
 import { PACKAGE_VERSION, installSkills, skillNames, skillsUpToDate } from '../src/paths'
+import { PROMPT_PREFIX, schedulePrompt } from '../src/schedule/run'
 
 const skillsDir = () => join(import.meta.dir, '..', 'skills')
 const templatesDir = () => join(import.meta.dir, '..', 'templates')
@@ -246,4 +247,29 @@ test('follow-up checks for a reply, drafts from known facts on a confirm, never 
   expect(never).toContain('Send, forward or schedule-send any mail')
   expect(never).toContain('`record_follow_up` before the user says the note was sent or skipped')
   expect(never).toContain('`ghosted`')
+})
+
+test('find and apply recognise the scheduled run prompts and carry the unattended rules', () => {
+  const now = new Date()
+  const find = read('find')
+  const findWhen = find.slice(find.indexOf('## When'), find.indexOf('## Inputs'))
+  expect(schedulePrompt('find_only', null, now)).toStartWith(`${PROMPT_PREFIX}, mode: find_only.`)
+  expect(schedulePrompt('apply', null, now)).toStartWith(`${PROMPT_PREFIX}, mode: apply.`)
+  expect(findWhen).toContain(`\`${PROMPT_PREFIX}, mode: find_only\``)
+  expect(findWhen).toContain('the days since the last scheduled run (at least 1, at most 7')
+  expect(findWhen).toContain('`record_application` (`status: "saved"`')
+  const apply = read('apply')
+  const applyWhen = apply.slice(apply.indexOf('## When'), apply.indexOf('## Inputs'))
+  const unattended = apply.slice(apply.indexOf('### Unattended'), apply.indexOf('### 1. Discover'))
+  expect(applyWhen).toContain(`\`${PROMPT_PREFIX}, mode: apply\``)
+  for (const phrase of [
+    'Never pause for input or ask a question',
+    'is recorded as `pending` per Stops with its `pending_reason`',
+    "Submit only when `autonomy` is `auto_after_approvals` and step 6's count already meets `approvals_before_auto`",
+    'save the application as `pending`',
+    'Respect `max_per_run`',
+    'CAPTCHAs and SMS codes always stop',
+    'near-duplicate',
+    'a consent whose key is false',
+  ]) expect(unattended).toContain(phrase)
 })

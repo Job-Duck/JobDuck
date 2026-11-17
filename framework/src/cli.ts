@@ -5,8 +5,10 @@ import { DASHBOARD_VIEWS } from './dashboard/server'
 import { runDoctor } from './commands/doctor'
 import { runInit } from './commands/init'
 import { runMcp } from './commands/mcp'
+import { runScheduleInstall, runScheduleRemove, runScheduleRun, runScheduleStatus } from './commands/schedule'
 import { runSync } from './commands/sync'
 import { CHANNELS, type Channel, runUpgrade } from './commands/upgrade'
+import { SCHEDULE_MODES } from './db/scheduled-runs'
 import { HOST_IDS } from './hosts'
 import { PACKAGE_VERSION, jobduckHome, refreshStaleSkills } from './paths'
 
@@ -77,6 +79,52 @@ program
   .option('--workspace <dir>', 'Job Duck workspace whose home to sync', process.cwd())
   .action(async (opts: { dryRun?: boolean; json?: boolean; workspace: string }) => {
     process.exitCode = await runSync({ dryRun: opts.dryRun, json: opts.json, workspace: opts.workspace })
+  })
+
+const schedule = program
+  .command('schedule')
+  .description('Run find (or apply) once a day through your OS scheduler, unattended, with your agent host')
+
+const workspaceOption = (command: Command) =>
+  command.option('--workspace <dir>', 'Job Duck workspace the scheduled run works in', process.cwd())
+
+workspaceOption(schedule
+  .command('install')
+  .description('Add the daily OS job (launchd, systemd --user timer or crontab, Task Scheduler) and set [schedule] enabled = true')
+  .option('--dry-run', 'print every file and command without writing or running anything')
+  .option('--time <HH:MM>', 'local time of day to run (default: [schedule] time, else 08:00)')
+  .addOption(new Option('--mode <mode>', 'find_only (default) or apply').choices(SCHEDULE_MODES))
+  .addOption(new Option('--host <host>', 'agent host to run (default: the first registered host, else claude)').choices(HOST_IDS)))
+  .action(async (opts: { dryRun?: boolean; time?: string; mode?: string; host?: string; workspace: string }) => {
+    process.exitCode = await runScheduleInstall(opts)
+  })
+
+workspaceOption(schedule
+  .command('remove')
+  .description('Delete the daily OS job and set [schedule] enabled = false')
+  .option('--dry-run', 'print every file and command without writing or running anything'))
+  .action(async (opts: { dryRun?: boolean; workspace: string }) => {
+    process.exitCode = await runScheduleRemove(opts)
+  })
+
+workspaceOption(schedule
+  .command('status')
+  .description('Show whether the OS job is installed, the next run and the last run')
+  .option('--dry-run', 'accepted for symmetry; status never writes anything')
+  .option('--json', 'print the status as JSON'))
+  .action(async (opts: { json?: boolean; workspace: string }) => {
+    process.exitCode = await runScheduleStatus(opts)
+  })
+
+workspaceOption(schedule
+  .command('run')
+  .description('One scheduled run now: record it and start the agent host headless (the OS job calls this)')
+  .option('--dry-run', 'print the host command without recording or running anything')
+  .option('--timeout <minutes>', 'stop the agent host after this many minutes', '45'))
+  .action(async (opts: { dryRun?: boolean; timeout: string; workspace: string }) => {
+    const minutes = Number(opts.timeout)
+    if (!Number.isFinite(minutes) || minutes <= 0) throw new Error('--timeout must be a positive number of minutes')
+    process.exitCode = await runScheduleRun({ dryRun: opts.dryRun, workspace: opts.workspace, timeoutMs: minutes * 60_000 })
   })
 
 program

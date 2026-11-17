@@ -11,16 +11,16 @@ afterEach(() => box.cleanup())
 
 test('migrations apply once and are idempotent', () => {
   const db = migratedDb(box.home)
-  expect(currentVersion(db)).toBe(8)
+  expect(currentVersion(db)).toBe(9)
   expect(migrate(db)).toEqual([])
-  expect(currentVersion(db)).toBe(8)
+  expect(currentVersion(db)).toBe(9)
   const rows = db.prepare('SELECT version FROM schema_migrations').all()
-  expect(rows).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((version) => ({ version })))
+  expect(rows).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map((version) => ({ version })))
   db.close()
 })
 
 test('migration files are numbered and ordered', () => {
-  expect(loadMigrations().map((m) => m.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+  expect(loadMigrations().map((m) => m.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
   const loaded = loadMigrations([
     { name: '010_ten.sql', sql: 'ten' }, { name: 'notes.txt', sql: 'x' }, { name: '002_two.sql', sql: 'two' },
   ])
@@ -32,7 +32,8 @@ test('the schema creates the expected tables', () => {
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[])
     .map((row) => row.name)
   expect(tables).toEqual([
-    'application_events', 'applications', 'outcomes', 'postings', 'profile_facts', 'schema_migrations', 'settings',
+    'application_events', 'applications', 'outcomes', 'postings', 'profile_facts', 'scheduled_runs', 'schema_migrations',
+    'settings',
   ])
   expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 })
   db.close()
@@ -58,12 +59,14 @@ const FACT_COLUMNS = ['id', 'slug', 'company', 'role', 'project', 'category', 'a
   'tools', 'basis', 'confidence', 'rationale', 'status', 'sort_order', 'created_at', 'updated_at']
 const POSTING_COLUMNS = ['seniority', 'education_level', 'min_experience_years', 'closed_at', 'summary', 'skills',
   'requirements', 'requires_clearance', 'pay_stated', 'field_sources', 'resolved_at']
+const SCHEDULED_RUN_COLUMNS = ['id', 'started_at', 'finished_at', 'mode', 'host', 'exit_code', 'found', 'applied', 'pending', 'error']
 const APPLICATION_COLUMNS = ['salary_min', 'salary_max', 'salary_offered', 'rsu', 'options', 'bonus', 'sign_on',
   'relocation_fee', 'currency', 'country_override', 'state_override', 'city_override']
 
-test('a fresh database reaches version 8 with the stage, pay, pending, profile fact, posting field, occurred_at, follow-up and outcome columns', () => {
+test('a fresh database reaches version 9 with the stage, pay, pending, profile fact, posting field, occurred_at, follow-up, outcome and scheduled run columns', () => {
   const db = migratedDb(box.home)
-  expect(currentVersion(db)).toBe(8)
+  expect(currentVersion(db)).toBe(9)
+  expect(columns(db, 'scheduled_runs')).toEqual(SCHEDULED_RUN_COLUMNS)
   expect(columns(db, 'outcomes')).toContain('scheduled_at')
   expect(columns(db, 'applications')).toContain('pending_reason')
   for (const column of STAGE_COLUMNS) expect(columns(db, 'application_events')).toContain(column)
@@ -173,7 +176,7 @@ test('a version 7 database with rejection outcomes migrates to version 8 without
     VALUES (9, 'm9', 'rejection', 'Globex', ?, 'needs_match', '[{"application_id":1}]', ?)`).run(now, now)
   const before = db.prepare('SELECT * FROM outcomes ORDER BY id').all() as Record<string, unknown>[]
 
-  expect(migrate(db)).toEqual([8])
+  expect(migrate(db, loadMigrations().filter((m) => m.version <= 8))).toEqual([8])
   expect(currentVersion(db)).toBe(8)
   expect(db.prepare('SELECT * FROM outcomes ORDER BY id').all()).toEqual(before.map((row) => ({ ...row, scheduled_at: null })))
   const insert = (messageId: string, kind: string, status: string) => db.prepare(`INSERT INTO outcomes
@@ -184,6 +187,32 @@ test('a version 7 database with rejection outcomes migrates to version 8 without
   expect(() => insert('m4', 'offer', 'pending')).toThrow()
   db.prepare('DELETE FROM applications WHERE id = 1').run()
   expect(db.prepare('SELECT application_id FROM outcomes WHERE id = 4').get()).toEqual({ application_id: null })
+  db.close()
+})
+
+test('a version 8 database with rows migrates to version 9 with an empty scheduled_runs table that checks its mode and counts', () => {
+  mkdirSync(box.home, { recursive: true })
+  const db = openDb(dbPath(box.home))
+  expect(migrate(db, loadMigrations().filter((m) => m.version <= 8))).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+  const now = '2026-01-02T03:04:05.000Z'
+  db.prepare(`INSERT INTO postings (id, source, url, url_key, title, company, created_at, updated_at)
+    VALUES (1, 'manual', 'https://acme.com/jobs/1', 'acme.com/jobs/1', 'Engineer', 'Acme', ?, ?)`).run(now, now)
+  db.prepare(`INSERT INTO applications (id, posting_id, status, created_at, updated_at) VALUES (1, 1, 'saved', ?, ?)`).run(now, now)
+  const before = db.prepare('SELECT * FROM applications').all()
+
+  expect(migrate(db)).toEqual([9])
+  expect(currentVersion(db)).toBe(9)
+  expect(db.prepare('SELECT * FROM applications').all()).toEqual(before)
+  expect(db.prepare('SELECT COUNT(*) AS n FROM scheduled_runs').get()).toEqual({ n: 0 })
+  const insert = (mode: string, found: number | null) => db.prepare(`INSERT INTO scheduled_runs (started_at, mode, host, found)
+    VALUES (?, ?, 'claude', ?)`).run(now, mode, found)
+  insert('find_only', null)
+  insert('apply', 3)
+  expect(() => insert('submit_everything', null)).toThrow()
+  expect(() => insert('apply', -1)).toThrow()
+  expect(() => db.prepare("INSERT INTO scheduled_runs (mode, host) VALUES ('apply', 'claude')").run()).toThrow()
+  const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]).map((row) => row.name)
+  expect(indexes).toContain('scheduled_runs_started')
   db.close()
 })
 

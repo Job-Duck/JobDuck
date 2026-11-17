@@ -133,6 +133,26 @@ export interface SyncStatus {
   last: LastSync | null
 }
 
+export type ScheduleMode = 'find_only' | 'apply'
+
+export interface ScheduledRun {
+  id: number
+  started_at: string
+  finished_at: string | null
+  mode: ScheduleMode
+  host: string
+  exit_code: number | null
+  found: number | null
+  applied: number | null
+  pending: number | null
+  error: string | null
+}
+
+export interface ScheduleStatus {
+  settings: { enabled: boolean; time: string; mode: ScheduleMode; host: string; host_set: boolean }
+  last_run: ScheduledRun | null
+}
+
 export interface Summary {
   counts: Record<string, number>
   needs_match: number
