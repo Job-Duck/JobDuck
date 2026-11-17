@@ -7,7 +7,9 @@ import type { Db } from '../src/db/client'
 import { listOutcomes } from '../src/db/outcomes'
 import { upsertPosting } from '../src/db/postings'
 import { permissionsPath } from '../src/paths'
-import { type AutoSync, type AutoSyncStatus, FIRST_RUN_DELAY_MS, SyncBusyError, unrefTimer } from '../src/sync/auto'
+import {
+  type AutoSync, type AutoSyncStatus, FIRST_RUN_DELAY_MS, MAX_TIMER_MS, SyncBusyError, createAutoSync, unrefTimer,
+} from '../src/sync/auto'
 import type { FetchLike } from '../src/sync/client'
 
 const SYNC_URL = 'https://script.example.com/macros/s/abc/exec'
@@ -20,8 +22,10 @@ class FakeClock {
   t = 0
   private seq = 0
   readonly timers = new Map<number, { at: number; fn: () => void }>()
+  readonly delays: number[] = []
   readonly setTimer = (fn: () => void, ms: number) => {
     const id = ++this.seq
+    this.delays.push(ms)
     this.timers.set(id, { at: this.t + ms, fn })
     return id
   }
@@ -225,6 +229,63 @@ test('a rejected token stops the timer until Sync now succeeds', async () => {
   expect(clock.timers.size).toBe(1)
   await clock.advance(15 * MINUTE)
   expect(pendingCalls()).toBe(4)
+})
+
+test('a token rejected on ack also stops the timer until Sync now succeeds', async () => {
+  configure()
+  const app = acmeApplication()
+  const fetchOk = ok([rejection('m1', app.id)])
+  reply = (body) => (body.action === 'ack' ? Response.json({ ok: false, error: 'unauthorized' }) : fetchOk(body))
+  start()
+  await clock.advance(FIRST_RUN_DELAY_MS)
+  expect(actions).toEqual(['pending', 'ack'])
+  expect(clock.timers.size).toBe(0)
+  const paused = sync.status()
+  expect(paused).toMatchObject({ configured: true, enabled: false, last: { ok: false, totals: { fetched: 1 } } })
+  expect(paused.last?.error).toContain('sync_token rejected')
+  expect(logged.some((line) => line.includes('paused'))).toBe(true)
+  await clock.advance(120 * MINUTE)
+  expect(pendingCalls()).toBe(1)
+
+  reply = fetchOk
+  expect(await sync.runNow()).toMatchObject({ enabled: true, last: { ok: true } })
+  expect(clock.timers.size).toBe(1)
+  await clock.advance(15 * MINUTE)
+  expect(pendingCalls()).toBe(3)
+})
+
+test('a huge interval is clamped to the longest setTimeout delay and never fires early', async () => {
+  let runs = 0
+  const totals = { fetched: 0, matched: { total: 0, marker: 0, url: 0, ref: 0, company_title: 0 }, awaiting_confirm: 0, needs_match: 0, known: 0, failed: 0 }
+  sync = createAutoSync({
+    settings: () => ({ configured: true, intervalMinutes: 99_999 }),
+    run: async () => {
+      runs++
+      return { totals, errors: [] }
+    },
+    setTimer: clock.setTimer, clearTimer: clock.clearTimer, now: clock.now,
+  })
+  sync.start()
+  await clock.advance(FIRST_RUN_DELAY_MS)
+  expect(runs).toBe(1)
+  await clock.advance(MAX_TIMER_MS - 1)
+  expect(runs).toBe(1)
+  await clock.advance(1)
+  expect(runs).toBe(2)
+  sync.refresh()
+  await sync.runNow()
+  expect(clock.delays[0]).toBe(FIRST_RUN_DELAY_MS)
+  expect(clock.delays.slice(1).length).toBeGreaterThan(1)
+  for (const delay of clock.delays.slice(1)) expect(delay).toBe(MAX_TIMER_MS)
+})
+
+test('an out-of-range auto_sync_minutes in permissions.toml never schedules anything', async () => {
+  configure({ minutes: 99_999 })
+  start()
+  expect(clock.timers.size).toBe(0)
+  await clock.advance(120 * MINUTE)
+  expect(actions).toEqual([])
+  expect(sync.status()).toMatchObject({ configured: false, enabled: false })
 })
 
 test('stop() clears the pending timer and nothing runs afterwards', async () => {

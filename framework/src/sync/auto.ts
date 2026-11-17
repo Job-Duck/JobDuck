@@ -4,6 +4,8 @@ import { SyncAuthError } from './client'
 /** Delay before the first automatic run after the dashboard starts. */
 export const FIRST_RUN_DELAY_MS = 10_000
 const MINUTE_MS = 60_000
+/** setTimeout's largest delay; a longer one overflows and fires after 1 ms. */
+export const MAX_TIMER_MS = 2 ** 31 - 1
 
 export interface AutoSyncSettings {
   /** True when the track module is on and `sync_url` and `sync_token` are set. */
@@ -15,6 +17,8 @@ export interface AutoSyncSettings {
 export interface SyncAttempt {
   totals: SyncTotals
   errors: string[]
+  /** The token was rejected after the fetch (on ack); pauses the timer like a rejected fetch. */
+  authRejected?: boolean
 }
 
 export interface LastSync {
@@ -106,7 +110,13 @@ export function createAutoSync(options: AutoSyncOptions): AutoSync {
 
   function schedule(ms: number) {
     clear()
-    timer = setTimer(tick, ms)
+    timer = setTimer(tick, Number.isFinite(ms) ? Math.min(Math.max(ms, 0), MAX_TIMER_MS) : MAX_TIMER_MS)
+  }
+
+  function pauseForAuth() {
+    pausedByAuth = true
+    clear()
+    log('auto-sync paused until you press Sync now on the Applications tab')
   }
 
   function tick() {
@@ -125,15 +135,12 @@ export function createAutoSync(options: AutoSyncOptions): AutoSync {
       last = { at: now().toISOString(), ok: errors.length === 0, totals: result.totals }
       if (errors.length > 0) last.error = errors.join('; ')
       for (const line of errors) log(`sync: ${line}`)
+      if (result.authRejected) pauseForAuth()
     } catch (error) {
       const message = redact(error instanceof Error ? error.message : String(error))
       last = { at: now().toISOString(), ok: false, error: message }
       log(`sync failed: ${message}`)
-      if (error instanceof SyncAuthError) {
-        pausedByAuth = true
-        clear()
-        log('auto-sync paused until you press Sync now on the Applications tab')
-      }
+      if (error instanceof SyncAuthError) pauseForAuth()
     } finally {
       running = false
     }

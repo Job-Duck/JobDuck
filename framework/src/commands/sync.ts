@@ -8,7 +8,9 @@ import {
   listLiveApplicationsForMatching, markSynced, setNeedsMatch,
 } from '../db/outcomes'
 import { NoHomeError, dbPath, discoverHome, permissionsPath, resolveWorkspace } from '../paths'
-import { type FetchLike, type InvalidOutcome, type SyncClient, type SyncOutcome, createSyncClient } from '../sync/client'
+import {
+  type FetchLike, type InvalidOutcome, SyncAuthError, type SyncClient, type SyncOutcome, createSyncClient,
+} from '../sync/client'
 import { type MatchDecision, type MatchKind, type ScoredCandidate, markerId, matchOutcome as decideMatch } from '../sync/match'
 
 export interface SyncOptions {
@@ -201,6 +203,8 @@ export interface SyncRun {
   totals: SyncTotals
   acked: number
   errors: string[]
+  /** The ack was refused as unauthorized; a refused fetch throws SyncAuthError instead. */
+  authRejected: boolean
 }
 
 async function storeAndAck(db: Db, client: SyncClient, outcomes: SyncOutcome[], autoApply: boolean, fail: (line: string) => void) {
@@ -218,15 +222,17 @@ async function storeAndAck(db: Db, client: SyncClient, outcomes: SyncOutcome[], 
     }
   }
   let acked = 0
+  let authRejected = false
   if (stored.length > 0) {
     try {
       acked = await client.ack(stored.map((entry) => entry.messageId))
       markSynced(db, stored.map((entry) => entry.outcomeId), nowIso())
     } catch (error) {
+      authRejected = error instanceof SyncAuthError
       fail(error instanceof Error ? error.message : String(error))
     }
   }
-  return { rows, acked }
+  return { rows, acked, authRejected }
 }
 
 /**
@@ -249,16 +255,17 @@ export async function syncOnce(target: SyncTarget, config: SyncConfig, options: 
   const db = owned ? target() : target
   let rows: SyncRow[]
   let acked = 0
+  let authRejected = false
   try {
     if (dryRun) rows = plan(db, outcomes, config.autoApply)
     else if (db === null) throw new Error('sync needs a database to store outcomes in')
-    else ({ rows, acked } = await storeAndAck(db, client, outcomes, config.autoApply, fail))
+    else ({ rows, acked, authRejected } = await storeAndAck(db, client, outcomes, config.autoApply, fail))
   } finally {
     if (owned) db?.close()
   }
 
   rows.push(...invalid.map(invalidRow))
-  return { dryRun, scriptVersion, rows, totals: totalsOf(rows), acked, errors }
+  return { dryRun, scriptVersion, rows, totals: totalsOf(rows), acked, errors, authRejected }
 }
 
 export async function runSync(options: SyncOptions = {}): Promise<number> {

@@ -29,9 +29,9 @@ test('Email Sync offers the auto_apply_interview_signals checkbox', () => {
   expect(group.fields.find((field) => field.key === 'track.auto_apply_interview_signals')?.type).toBe('checkbox')
 })
 
-test('Email Sync offers auto_sync_minutes as a number that may be 0', () => {
+test('Email Sync offers auto_sync_minutes as a number from 0 to 1440', () => {
   const group = SETTINGS_GROUPS.find((candidate) => candidate.title === 'Email Sync')!
-  expect(group.fields.find((field) => field.key === 'track.auto_sync_minutes')).toMatchObject({ type: 'number', min: 0 })
+  expect(group.fields.find((field) => field.key === 'track.auto_sync_minutes')).toMatchObject({ type: 'number', min: 0, max: 1440 })
 })
 
 test('the sync line shows the last run with its new count, the error, or that none ran yet', () => {

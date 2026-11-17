@@ -20,6 +20,7 @@ export interface Field {
   options?: readonly Choice[]
   suggest?: readonly string[]
   min?: number
+  max?: number
   step?: number
   columns?: readonly Column[]
   addLabel?: string
@@ -186,7 +187,7 @@ export const SETTINGS_GROUPS: Group[] = [
       { key: 'track.sync_url', label: 'Web App URL', type: 'url', wide: true, placeholder: 'https://script.google.com/macros/s/…/exec' },
       { key: 'track.sync_token', label: 'Token', type: 'password', autocomplete: 'new-password' },
       { key: 'track.auto_apply_interview_signals', label: 'Record Interview, Assessment And Offer Emails Without Asking', type: 'checkbox', help: 'Off: each one waits on the Applications tab for you to confirm or dismiss.' },
-      { key: 'track.auto_sync_minutes', label: 'Sync Automatically Every (Minutes)', type: 'number', min: 0, placeholder: '0 (off)', help: 'Only while the dashboard is running. 0 turns it off; Sync now on the Applications tab still works.' },
+      { key: 'track.auto_sync_minutes', label: 'Sync Automatically Every (Minutes)', type: 'number', min: 0, max: 1440, placeholder: '0 (off)', help: 'Only while the dashboard is running, at most 1440 (once a day). 0 turns it off; Sync now on the Applications tab still works.' },
     ],
   },
   {

@@ -166,10 +166,13 @@ test('auto_apply_interview_signals defaults to false, parses true and keeps its 
   expect(template).toMatch(/^auto_apply_interview_signals = false +# record synced interview/m)
 })
 
-test('auto_sync_minutes defaults to 15, 0 parses as off, and negatives or fractions are refused', () => {
+test('auto_sync_minutes defaults to 15, 0 parses as off, and negatives, fractions or more than 1440 are refused', () => {
   expect(parsePermissions('').track.auto_sync_minutes).toBe(15)
   expect(parsePermissions('[track]\nauto_sync_minutes = 0\n').track.auto_sync_minutes).toBe(0)
   expect(parsePermissions('[track]\nauto_sync_minutes = 60\n').track.auto_sync_minutes).toBe(60)
+  expect(parsePermissions('[track]\nauto_sync_minutes = 1440\n').track.auto_sync_minutes).toBe(1440)
+  expect(() => parsePermissions('[track]\nauto_sync_minutes = 1441\n')).toThrow()
+  expect(() => parsePermissions('[track]\nauto_sync_minutes = 99999\n')).toThrow()
   expect(() => parsePermissions('[track]\nauto_sync_minutes = -1\n')).toThrow()
   expect(() => parsePermissions('[track]\nauto_sync_minutes = 1.5\n')).toThrow()
   const text = serializePermissions(parsePermissions('[track]\nauto_sync_minutes = 0\n'))

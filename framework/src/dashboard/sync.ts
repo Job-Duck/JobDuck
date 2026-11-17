@@ -40,8 +40,8 @@ export function createDashboardSync(options: DashboardSyncOptions): AutoSync {
     run: async () => {
       const config = syncConfig(home)
       if (config === null) throw new Error(SYNC_NOT_CONFIGURED)
-      const { totals, errors } = await syncOnce(db, config, { fetch })
-      return { totals, errors }
+      const { totals, errors, authRejected } = await syncOnce(db, config, { fetch })
+      return { totals, errors, authRejected }
     },
   })
 }
