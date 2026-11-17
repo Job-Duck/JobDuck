@@ -1,7 +1,9 @@
 /**
- * Job Duck — Gmail Rejection Sync v5.6
+ * Job Duck — Gmail Rejection Sync v5.7
  * Script v5.4 — serve-only: rejections are queued in the script and served to `jobduck sync` by the script deployed
  * as a web app. Nothing is pushed anywhere.
+ * Script v5.7 — a thread kept for an interview invite, an assessment or an offer also queues one outcome (kind and a
+ * stated date only) so `jobduck sync` can offer it for confirmation; the thread itself stays untouched in the Inbox.
  *
  * Handles two kinds of mail only, by allowlist, reading message bodies only. A thread whose every message is a plain
  * application confirmation (only acknowledgement sentences or proven boilerplate, no personal note) gets
@@ -9,7 +11,8 @@
  * latest job message and every other message is a plain confirmation. Everything else (interview mail, a recruiter's
  * note, any sentence the script does not know) is kept: no label, no archive, left in the Inbox. Each rejection that
  * stands becomes an outcome (header fields and a job link/ID only; the email body never leaves Gmail) queued for the
- * web app.
+ * web app. So does the message behind a kept thread's interview, assessment or offer signal, once, with its kind and
+ * the date it states (if any).
  *
  * Scope: the script only ever searches the Inbox (in:inbox), plus the "Job Duck/Applications" label when you run
  * previewReaudit/reauditApplications and the "Job Duck/Rejections" label when you run
@@ -26,7 +29,7 @@
  * Optional properties: PROTECTED_LABELS and EXCLUDED_DOMAINS (comma-separated), KEEP_ACTION_MAIL_IN_INBOX=true.
  */
 
-var SCRIPT_VERSION = '5.6';
+var SCRIPT_VERSION = '5.7';
 
 var LABEL_PARENT = 'Job Duck';
 
@@ -48,7 +51,7 @@ var CONFIG = {
   // A safety net since v5.4: verification and security-code mail asks for an action, so it is never archived anyway.
   // Also read from the script property KEEP_ACTION_MAIL_IN_INBOX ('true').
   KEEP_ACTION_MAIL_IN_INBOX: false,
-  // Only rejections on/after this date are queued for jobduck sync.
+  // Only rejections and interview signals on/after this date are queued for jobduck sync.
   SYNC_SINCE: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
   RUN_QUERY: 'in:inbox newer_than:3d',
   MAX_THREADS_PER_RUN: 100,
@@ -62,6 +65,11 @@ var MAX_TITLE_LENGTH = 120;
 var OUTCOME_PREFIX = 'outcome:';
 var MAX_OUTCOMES = 1000;
 var MAX_OUTCOME_TEXT = 200;
+// One `signal:<messageId>` entry (the message date) per interview signal already queued, so a kept thread that is
+// re-read on every run queues its signal once, even after jobduck sync has acked and deleted the outcome.
+var SIGNAL_PREFIX = 'signal:';
+var MAX_SIGNALS = 1000;
+var SIGNAL_KINDS = ['interview_invite', 'assessment', 'offer'];
 var APPLICATIONS_QUERY = 'label:"' + CONFIG.JOB_LABEL + '"';
 var REJECTIONS_QUERY = 'label:"' + CONFIG.DENY_LABEL + '"';
 var REAUDIT_PAGE = 50;
@@ -154,6 +162,7 @@ function processThread_(thread) {
       unqueueOutcomes_(messages);
       thread.moveToInbox();
     }
+    if (d.signal && d.message.getDate() >= CONFIG.SYNC_SINCE) recordSignal_(d.message, d.reasons);
     return 'keep';
   }
 
@@ -212,7 +221,7 @@ function keptFor_(notes, note, why) {
     if (notes[i].plain || (notes[i].deny && rejectionStands_(notes[i].body))) continue;
     var iv = interviewScore(notes[i].body);
     if (iv.positive) {
-      return { action: 'keep', reasons: reasons.concat(iv.reasons), evidence: iv.evidence, message: notes[i].message };
+      return { action: 'keep', signal: true, reasons: reasons.concat(iv.reasons), evidence: iv.evidence, message: notes[i].message };
     }
   }
   var action = actionIn_(note.subject, note.body);
@@ -317,6 +326,7 @@ function preview() {
       } else if (d.action === 'keep') {
         keeps++;
         Logger.log('KEEP ' + line);
+        if (d.signal) Logger.log('  would queue: ' + JSON.stringify(signalOutcome_(d.message, d.reasons)));
       } else {
         jobs++;
       }
@@ -472,6 +482,122 @@ function recordRejection_(message) {
   queueOutcome_(buildOutcome_(message));
 }
 
+/** Queues the outcome of a kept thread's interview signal once per message. Returns 'seen', 'queued', 'exists' or
+ *  'full' (not marked, so a later run tries again). */
+function recordSignal_(message, reasons) {
+  var store = outcomeStore_();
+  var mark = SIGNAL_PREFIX + outcomeId_(message);
+  if (store.getProperty(mark) != null) return 'seen';
+  var outcome = signalOutcome_(message, reasons);
+  var r = queueOutcome_(outcome);
+  if (r === 'full') return r;
+  pruneSignals_(store);
+  store.setProperty(mark, outcome.receivedAt);
+  return r;
+}
+
+function signalOutcome_(message, reasons) {
+  var outcome = buildOutcome_(message);
+  outcome.kind = signalKind_(reasons);
+  outcome.scheduledAt = scheduledAt_(message.getPlainBody());
+  return outcome;
+}
+
+/** offer > assessment > interview_invite. 'direct offer' and 'moved forward' are offers of an interview step
+ *  (directOffer_), not job offers, so they are invites. */
+function signalKind_(reasons) {
+  if (reasons.indexOf('offer') >= 0) return 'offer';
+  if (reasons.indexOf('assessment') >= 0) return 'assessment';
+  return 'interview_invite';
+}
+
+/** Drops signal marks older than CONFIG.SYNC_SINCE (such mail is never queued again) and, past MAX_SIGNALS, the
+ *  oldest, leaving room for one more. */
+function pruneSignals_(store) {
+  var all = store.getProperties();
+  var since = CONFIG.SYNC_SINCE.toISOString();
+  var marks = Object.keys(all).filter(function (k) { return k.indexOf(SIGNAL_PREFIX) === 0; });
+  var kept = marks.filter(function (k) {
+    if (String(all[k]) >= since) return true;
+    store.deleteProperty(k);
+    return false;
+  });
+  kept.sort(function (a, b) { return String(all[a]).localeCompare(String(all[b])); });
+  kept.slice(0, Math.max(0, kept.length - MAX_SIGNALS + 1)).forEach(function (k) { store.deleteProperty(k); });
+}
+
+// The date an interview email states, read by scheduledAt_: ISO (2026-03-04, 2026-03-04T14:00), month first
+// (March 4, 2026 / Mar. 4th 2026) or day first (4 March 2026), each with a full year, optionally followed by a clock
+// time (at 2:00 PM, 2pm, 14:00). Relative dates (tomorrow, next Tuesday), dates without a year and numeric dates
+// such as 03/04/2026 (month or day first?) are never read.
+var SA_MONTH = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
+var SA_ISO = /\b(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?(?![\d-])/g;
+var SA_MONTH_FIRST = new RegExp('\\b' + SA_MONTH + ' (\\d{1,2})(?:st|nd|rd|th)?,? (\\d{4})\\b', 'gi');
+var SA_DAY_FIRST = new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)? (?:of )?' + SA_MONTH + ',? (\\d{4})\\b', 'gi');
+var SA_TIME_12 = /^,?\s*(?:(?:at|@|from)\s+)?(\d{1,2})(?::([0-5]\d))?\s*([ap])\.?\s?m\b\.?/i;
+var SA_TIME_24 = /^,?\s*(?:(?:at|@|from)\s+)?([01]?\d|2[0-3]):([0-5]\d)(?![\d:])/;
+// "2:00 - 3:00 PM": the start's meridiem is only implied, so no time is read.
+var SA_RANGE_MERIDIEM = /^\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*[ap]\.?\s?m\b/i;
+// Quoted earlier mail in a reply carries its own dates ("On Mon, Mar 2, 2026 at 10:00 AM Alex wrote:").
+var SA_QUOTE_START = /^[ \t]*(?:On\b[\s\S]{0,300}?\bwrote:|-{2,} ?(?:Original Message|Forwarded message) ?-{2,})/m;
+
+function pad2_(n) { return (n < 10 ? '0' : '') + n; }
+
+/** 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM' (the time as written, no zone) when the body states exactly one calendar date,
+ *  else null. Pure. */
+function scheduledAt_(body) {
+  var text = String(body || '');
+  var quote = text.search(SA_QUOTE_START);
+  if (quote >= 0) text = text.slice(0, quote);
+  text = text.split('\n').filter(function (line) { return !/^\s*>/.test(line); }).join('\n').replace(/\s+/g, ' ');
+  var found = {};
+  function add(y, mo, d, rest, h, mi) {
+    y = Number(y); mo = Number(mo); d = Number(d);
+    var date = new Date(Date.UTC(y, mo - 1, d));
+    if (mo < 1 || mo > 12 || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return;
+    var day = y + '-' + pad2_(mo) + '-' + pad2_(d);
+    var time = h != null ? clock_(Number(h), Number(mi), null) : timeAfter_(rest);
+    if (!found[day]) found[day] = {};
+    if (time) found[day][time] = true;
+  }
+  var m;
+  SA_ISO.lastIndex = 0;
+  while ((m = SA_ISO.exec(text))) add(m[1], m[2], m[3], text.slice(SA_ISO.lastIndex), m[4], m[5]);
+  SA_MONTH_FIRST.lastIndex = 0;
+  while ((m = SA_MONTH_FIRST.exec(text))) add(m[3], monthNumber_(m[1]), m[2], text.slice(SA_MONTH_FIRST.lastIndex));
+  SA_DAY_FIRST.lastIndex = 0;
+  while ((m = SA_DAY_FIRST.exec(text))) add(m[3], monthNumber_(m[2]), m[1], text.slice(SA_DAY_FIRST.lastIndex));
+  var days = Object.keys(found);
+  if (days.length !== 1) return null;
+  var times = Object.keys(found[days[0]]);
+  return times.length === 1 ? days[0] + 'T' + times[0] : days[0];
+}
+
+function monthNumber_(name) {
+  return ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+    .indexOf(String(name).slice(0, 3).toLowerCase()) + 1;
+}
+
+function timeAfter_(rest) {
+  var m = SA_TIME_12.exec(rest);
+  if (m) return clock_(Number(m[1]), Number(m[2] || 0), m[3].toLowerCase());
+  m = SA_TIME_24.exec(rest);
+  if (!m || SA_RANGE_MERIDIEM.test(rest.slice(m[0].length))) return null;
+  return clock_(Number(m[1]), Number(m[2]), null);
+}
+
+/** 'HH:MM' from a 12-hour (meridiem 'a' or 'p') or 24-hour clock, else null. */
+function clock_(h, mi, meridiem) {
+  if (mi > 59) return null;
+  if (meridiem) {
+    if (h < 1 || h > 12) return null;
+    h = h % 12 + (meridiem === 'p' ? 12 : 0);
+  } else if (h > 23) {
+    return null;
+  }
+  return pad2_(h) + ':' + pad2_(mi);
+}
+
 /** Drops the still-pending outcomes of a thread whose rejection no longer stands. */
 function unqueueOutcomes_(messages) {
   var store = outcomeStore_();
@@ -523,6 +649,10 @@ function queueOutcome_(outcome) {
     .forEach(function (f) { value[f] = outcome[f] === undefined ? null : outcome[f]; });
   if (value.subject) value.subject = String(value.subject).slice(0, MAX_OUTCOME_TEXT);
   if (value.title) value.title = String(value.title).slice(0, MAX_OUTCOME_TEXT);
+  if (SIGNAL_KINDS.indexOf(outcome.kind) >= 0) {
+    value.kind = outcome.kind;
+    value.scheduledAt = outcome.scheduledAt || null;
+  }
   value.queuedAt = new Date().toISOString();
   store.setProperty(key, JSON.stringify(value));
   return 'queued';

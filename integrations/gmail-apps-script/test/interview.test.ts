@@ -106,7 +106,7 @@ function load(
   vm.createContext(sandbox);
   vm.runInContext(
     readFileSync(join(import.meta.dir, '..', 'Code.gs'), 'utf8') +
-      '\nthis.__api = { processThread_, reauditApplications, previewReaudit, reauditRejections, previewReauditRejections, resetReaudit, preview, isInterview, unexplainedRejection_ };',
+      '\nthis.__api = { processThread_, reauditApplications, previewReaudit, reauditRejections, previewReauditRejections, resetReaudit, preview, isInterview, unexplainedRejection_, scheduledAt_, listOutcomes_ };',
     sandbox,
   );
   const api = sandbox.__api as {
@@ -119,8 +119,18 @@ function load(
     preview(): void;
     isInterview(body: string): boolean;
     unexplainedRejection_(body: string): string | null;
+    scheduledAt_(body: string): string | null;
+    listOutcomes_(): Array<Record<string, unknown>>;
   };
   return { api, logs, scriptStore, userStore, created };
+}
+
+/** The kind of every queued outcome, sorted; a rejection carries no kind. */
+function queuedKinds(data: Record<string, string>) {
+  return Object.keys(data)
+    .filter((k) => k.startsWith('outcome:'))
+    .map((k) => JSON.parse(data[k]).kind || 'rejection')
+    .sort();
 }
 
 describe('processThread_ leaves kept mail untouched in the Inbox', () => {
@@ -172,7 +182,7 @@ describe('processThread_ leaves kept mail untouched in the Inbox', () => {
     expect(plain.calls).toEqual(['add ' + REJECTIONS, 'archive']);
     expect(api.processThread_(interviewed)).toBe('keep');
     expect(interviewed.calls).toEqual([]);
-    expect(Object.keys(scriptStore.data).filter((k) => k.startsWith('outcome:'))).toHaveLength(1);
+    expect(queuedKinds(scriptStore.data)).toEqual(['interview_invite', 'rejection']);
   });
 
   test('an invite after the latest rejection keeps the thread, not deny', () => {
@@ -181,7 +191,7 @@ describe('processThread_ leaves kept mail untouched in the Inbox', () => {
     expect(api.processThread_(t)).toBe('keep');
     expect(t.calls).toEqual(['remove ' + APPLICATIONS]);
     expect(t.inInbox).toBe(true);
-    expect(Object.keys(scriptStore.data).filter((k) => k.startsWith('outcome:'))).toHaveLength(0);
+    expect(queuedKinds(scriptStore.data)).toEqual(['interview_invite']);
   });
 
   test('a rejection that offers a call about another role is kept, not deny', () => {
@@ -274,7 +284,8 @@ describe('the archive is an allowlist', () => {
     expect(api.processThread_(t)).toBe('keep');
     expect(t.calls).toEqual(['remove ' + REJECTIONS, 'inbox']);
     expect(t.labels.size).toBe(0);
-    expect(outcomes(scriptStore.data)).toHaveLength(0);
+    expect(queuedKinds(scriptStore.data)).toEqual(['interview_invite']);
+    expect(outcomes(scriptStore.data)).toEqual(['outcome:' + invite.getHeader()]);
   });
 
   test('a thread labeled Rejections whose rejection still stands is re-archived without being re-queued', () => {
@@ -1385,5 +1396,117 @@ describe('only proven boilerplate is exempt from the scheduling-word check; when
     ['a first-person note', 'I really enjoyed reading your portfolio and passed it to the team myself.'],
   ])('a confirmation with %s is kept', (_shape, paragraph) => {
     expect(classify(wrapped(paragraph))).toBe('keep');
+  });
+});
+
+describe('v5.7: a kept thread with an interview, assessment or offer signal queues it once for jobduck sync', () => {
+  const ACME = 'Hi Alex,\n\nThank you for applying to the Backend Engineer role at Acme. ';
+  const SIGN = '\n\nAcme Recruiting';
+  const INVITE = ACME + 'We would like to invite you to a phone interview on March 4, 2026 at 2:00 PM.' + SIGN;
+  const ASSESSMENT = ACME + 'Please complete the HackerRank assessment within 5 days.' + SIGN;
+  const OFFER = ACME + 'We are pleased to extend you an offer for the Backend Engineer role. Please complete the coding assessment as well.' + SIGN;
+  const SCREEN_AND_TEST = ACME + 'We would like to schedule a phone screen with you. Please also complete the coding assessment by Friday.' + SIGN;
+
+  test('an invite queues one interview_invite outcome with its stated date; the thread stays untouched', () => {
+    const m = message('Interview with Acme', INVITE);
+    const t = thread([], [m]);
+    const { api, created } = load([t]);
+    expect(api.processThread_(t)).toBe('keep');
+    expect(t.calls).toEqual([]);
+    expect(t.labels.size).toBe(0);
+    expect(t.inInbox).toBe(true);
+    expect(created).toEqual([]);
+    const served = api.listOutcomes_();
+    expect(served).toHaveLength(1);
+    expect(served[0]).toMatchObject({ messageId: m.getHeader(), kind: 'interview_invite', scheduledAt: '2026-03-04T14:00', senderDomain: 'greenhouse.io' });
+    expect(JSON.stringify(served[0])).not.toContain('phone interview');
+  });
+
+  test.each([
+    ['assessment', ASSESSMENT],
+    ['offer', OFFER],
+    ['assessment', SCREEN_AND_TEST],
+  ])('kind %s, by precedence offer > assessment > interview_invite', (kind, body) => {
+    const t = thread([], [message('Next step with Acme', body)]);
+    const { api } = load([t]);
+    expect(api.processThread_(t)).toBe('keep');
+    expect(api.listOutcomes_().map((o) => [o.kind, o.scheduledAt])).toEqual([[kind, null]]);
+  });
+
+  test('a kept thread scanned again queues nothing more, also after jobduck sync acked the outcome', () => {
+    const m = message('Interview with Acme', INVITE);
+    const t = thread([], [m]);
+    const { api, scriptStore } = load([t]);
+    api.processThread_(t);
+    api.processThread_(t);
+    expect(api.listOutcomes_()).toHaveLength(1);
+    delete scriptStore.data['outcome:' + m.getHeader()];
+    expect(api.processThread_(t)).toBe('keep');
+    expect(api.listOutcomes_()).toHaveLength(0);
+    expect(scriptStore.data['signal:' + m.getHeader()]).toBeDefined();
+  });
+
+  test('signal marks older than SYNC_SINCE are dropped when a new signal is recorded', () => {
+    const t = thread([], [message('Interview with Acme', INVITE)]);
+    const { api, scriptStore } = load([t], { 'signal:<old@example.com>': '2000-01-01T00:00:00.000Z', 'signal:<new@example.com>': new Date().toISOString() });
+    api.processThread_(t);
+    expect(Object.keys(scriptStore.data).filter((k) => k.startsWith('signal:')).sort()).toEqual(['signal:<new@example.com>', 'signal:' + t.getMessages()[0].getHeader()].sort());
+  });
+
+  test.each([
+    ['a recruiter note with no interview signal', RECRUITER_NOTE],
+    ['only a mention of an interview', ACME + 'I will share interview feedback with the team.' + SIGN],
+    ['a rejection that offers a conversation', "Hi Alex,\n\nWe have decided not to move forward with your application for the Senior role, but we'd like to schedule a call about our Staff role.\n\nHooli Recruiting"],
+  ])('%s is kept and queues nothing', (_shape, body) => {
+    const t = thread([], [message('Your application to Acme', body)]);
+    const { api, scriptStore } = load([t]);
+    expect(api.processThread_(t)).toBe('keep');
+    expect(t.calls).toEqual([]);
+    expect(Object.keys(scriptStore.data)).toEqual([]);
+  });
+
+  test('a signal received before SYNC_SINCE is not queued', () => {
+    const m = message('Interview with Acme', INVITE);
+    m.getDate = () => new Date('2000-01-01T00:00:00Z');
+    const t = thread([], [m]);
+    const { api, scriptStore } = load([t]);
+    expect(api.processThread_(t)).toBe('keep');
+    expect(Object.keys(scriptStore.data)).toEqual([]);
+  });
+
+  test('preview logs the signal it would queue and queues nothing', () => {
+    const t = thread([], [message('Interview with Acme', INVITE)]);
+    const { api, logs, scriptStore } = load([t]);
+    api.preview();
+    expect(logs.some((l) => l.includes('would queue: ') && l.includes('"kind":"interview_invite"'))).toBe(true);
+    expect(Object.keys(scriptStore.data)).toEqual([]);
+    expect(t.calls).toEqual([]);
+  });
+
+  test.each([
+    ['Your interview is on March 4, 2026 at 2:00 PM ET.', '2026-03-04T14:00'],
+    ['See you on 4 March 2026.', '2026-03-04'],
+    ['Slot: 2026-03-04T09:30.', '2026-03-04T09:30'],
+    ['Slot: 2026-03-04 16:45.', '2026-03-04T16:45'],
+    ['Mar. 4th, 2026, 10am works.', '2026-03-04T10:00'],
+    ['The 4th of September 2026 at 9:15 a.m. is booked.', '2026-09-04T09:15'],
+    ['Wednesday, March 4, 2026 from 2:00 - 3:00 PM.', '2026-03-04'],
+    ['March 4, 2026 at 2pm. A reminder for March 4, 2026 follows.', '2026-03-04T14:00'],
+    ['See you March 4, 2026.\n\nOn Mon, Mar 2, 2026 at 10:00 AM Alex <alex@example.com> wrote:\n> Hi', '2026-03-04'],
+  ])('scheduledAt_ reads %p as %p', (body, expected) => {
+    expect(load([]).api.scheduledAt_(body)).toBe(expected);
+  });
+
+  test.each([
+    ['tomorrow at 2pm'],
+    ['next Tuesday at 10:00'],
+    ['March 4 at 2pm'],
+    ['03/04/2026 at 2pm'],
+    ['February 30, 2026'],
+    ['March 4, 2026 or March 5, 2026'],
+    ['no date at all'],
+    [''],
+  ])('scheduledAt_ reads no date from %p', (body) => {
+    expect(load([]).api.scheduledAt_(body)).toBeNull();
   });
 });
