@@ -185,6 +185,7 @@ export const SETTINGS_GROUPS: Group[] = [
     fields: [
       { key: 'track.sync_url', label: 'Web App URL', type: 'url', wide: true, placeholder: 'https://script.google.com/macros/s/…/exec' },
       { key: 'track.sync_token', label: 'Token', type: 'password', autocomplete: 'new-password' },
+      { key: 'track.auto_apply_interview_signals', label: 'Record Interview, Assessment And Offer Emails Without Asking', type: 'checkbox', help: 'Off: each one waits on the Applications tab for you to confirm or dismiss.' },
     ],
   },
   {

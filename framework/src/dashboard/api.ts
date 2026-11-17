@@ -21,7 +21,10 @@ import {
   FACT_BASES, FACT_CATEGORIES, FACT_CONFIDENCES, FACT_STATUSES, MAX_TAG_LENGTH, MAX_TAGS, SlugConflict, deleteFact,
   getFact, listFacts, updateFact,
 } from '../db/profile-facts'
-import { OUTCOME_STATUSES, type Outcome, dismissOutcome, getOutcome, listOutcomes, matchOutcome } from '../db/outcomes'
+import {
+  OUTCOME_STATUSES, type Outcome, alreadyRecorded, confirmOutcome, dismissOutcome, getOutcome, isSignalKind, listOutcomes,
+  matchOutcome, notAwaitingConfirm,
+} from '../db/outcomes'
 import { IMPORT_EXTENSIONS } from '../onboarding/ledger'
 import { onboardingStatus, workspaceOf } from '../onboarding/status'
 import { permissionsPath, profilePath } from '../paths'
@@ -233,6 +236,14 @@ function parseCandidates(value: string | null): unknown[] {
 }
 
 const withCandidates = (outcome: Outcome) => ({ ...outcome, candidates: parseCandidates(outcome.candidates) })
+
+function autoApplyInterviewSignals(home: string): boolean {
+  try {
+    return readStoredPermissions(permissionsPath(home)).permissions.track.auto_apply_interview_signals
+  } catch {
+    return false
+  }
+}
 
 function checkVersion(row: { updated_at: string }, expected: string | undefined) {
   if (expected !== undefined && expected !== row.updated_at) throw new ApiError(409, STALE_MESSAGE)
@@ -467,14 +478,27 @@ const routes: { method: string; pattern: RegExp; handler: Handler }[] = [
   },
   {
     method: 'POST', pattern: /^\/api\/outcomes\/(\d+)\/match$/,
-    handler: ({ db }, req, id) => {
+    handler: ({ db, home }, req, id) => {
       const { application_id } = parse(matchSchema, req.body ?? {})
       return transaction(db, () => {
-        if (!getOutcome(db, id)) throw new ApiError(404, `outcome ${id} not found`)
+        const outcome = getOutcome(db, id)
+        if (!outcome) throw new ApiError(404, `outcome ${id} not found`)
         if (!getApplication(db, application_id)) throw new ApiError(404, `application ${application_id} not found`)
-        return matchOutcome(db, id, application_id, { source: 'dashboard' })
+        const signal = isSignalKind(outcome.kind)
+        if (signal && outcome.status === 'matched') throw new ApiError(409, alreadyRecorded(id))
+        return matchOutcome(db, id, application_id, { source: 'dashboard', autoConfirm: signal && autoApplyInterviewSignals(home) })
       })
     },
+  },
+  {
+    method: 'POST', pattern: /^\/api\/outcomes\/(\d+)\/confirm$/,
+    handler: ({ db }, _req, id) => transaction(db, () => {
+      const outcome = getOutcome(db, id)
+      if (!outcome) throw new ApiError(404, `outcome ${id} not found`)
+      if (outcome.status !== 'awaiting_confirm' || outcome.application_id === null) throw new ApiError(409, notAwaitingConfirm(id))
+      if (!getApplication(db, outcome.application_id)) throw new ApiError(404, `application ${outcome.application_id} not found`)
+      return confirmOutcome(db, id, { source: 'dashboard' })
+    }),
   },
   {
     method: 'POST', pattern: /^\/api\/outcomes\/(\d+)\/dismiss$/,

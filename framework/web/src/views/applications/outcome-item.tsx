@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useFlash } from '@/hooks/use-flash'
 import { applicationsPath, errorMessage, fetchJSON, postJSON } from '@/lib/api'
 import { stamp, statusLabel } from '@/lib/format'
+import { isSignal, matchedMessage, scheduledLabel, signalLabel } from '@/lib/outcomes'
 import type { ApplicationRow, Outcome } from '@/lib/types'
 
 interface OutcomeItemProps {
@@ -31,10 +32,10 @@ export function OutcomeItem({ outcome, onChanged }: OutcomeItemProps) {
     }
   }, [search, flash])
 
-  const run = async (action: () => Promise<unknown>, message?: string) => {
+  const run = async <T,>(action: () => Promise<T>, message?: (result: T) => string) => {
     try {
-      await action()
-      if (message) flash(message)
+      const result = await action()
+      if (message) flash(message(result))
       await onChanged()
     } catch (error) {
       flash(errorMessage(error), true)
@@ -44,11 +45,12 @@ export function OutcomeItem({ outcome, onChanged }: OutcomeItemProps) {
   const match = () => {
     if (!choice) return flash('Choose an application to match', true)
     return run(
-      () => postJSON(`/api/outcomes/${outcome.id}/match`, { application_id: Number(choice) }),
-      'Matched; application closed as deny by employer.',
+      () => postJSON<{ outcome: Outcome }>(`/api/outcomes/${outcome.id}/match`, { application_id: Number(choice) }),
+      (result) => matchedMessage(result.outcome.kind, result.outcome.status),
     )
   }
 
+  const scheduled = scheduledLabel(outcome.scheduled_at)
   const items = (options ?? []).map((row) => ({
     value: String(row.id),
     label: `${row.company} — ${row.title} (${statusLabel(row.status)})`,
@@ -57,9 +59,15 @@ export function OutcomeItem({ outcome, onChanged }: OutcomeItemProps) {
   return (
     <li className="flex flex-col gap-3 border-b py-3 last:border-b-0 lg:flex-row lg:items-center">
       <div className="min-w-0 flex-1 space-y-0.5">
-        <p className="font-medium">{outcome.company || 'Unknown Company'}</p>
+        <p className="font-medium">
+          {isSignal(outcome.kind) && `${signalLabel(outcome.kind)} — `}
+          {outcome.company || 'Unknown Company'}
+        </p>
         <p className="truncate text-muted-foreground">{outcome.title || outcome.job_ref || ''}</p>
-        <p className="text-xs text-muted-foreground">Received {stamp(outcome.received_at)}</p>
+        <p className="text-xs text-muted-foreground">
+          Received {stamp(outcome.received_at)}
+          {scheduled && ` · Scheduled ${scheduled}`}
+        </p>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row lg:w-[28rem]">
         <Input

@@ -63,6 +63,7 @@ export const ApplyManifest = z.object({
 export const TrackSettings = z.looseObject({
   sync_url: z.string().default(''),
   sync_token: z.string().default(''),
+  auto_apply_interview_signals: z.boolean().default(false),
 })
 
 export const CvSettings = z.looseObject({
@@ -110,6 +111,7 @@ const COMMENTS: Record<string, string> = {
   'apply.tailor_cv': 'never | when_bottleneck | always',
   'apply.free_text': 'never | draft_for_approval | auto_from_profile',
   'apply.marker': 'paste the JobDuck-Application-Id marker into an editable field',
+  'track.auto_apply_interview_signals': 'record synced interview, assessment and offer emails without asking to confirm',
 }
 
 export function serializePermissions(permissions: Record<string, unknown>): string {
