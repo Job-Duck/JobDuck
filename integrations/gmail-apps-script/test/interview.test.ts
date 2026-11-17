@@ -1474,6 +1474,34 @@ describe('v5.7: a kept thread with an interview, assessment or offer signal queu
     expect(Object.keys(scriptStore.data)).toEqual([]);
   });
 
+  test('an invite and then an offer in one thread queue both, each with its own kind and date, once across two runs', () => {
+    const invite = message('Interview with Acme', INVITE);
+    const offer = message('Re: Interview with Acme', OFFER);
+    const t = thread([], [invite, offer]);
+    const { api } = load([t]);
+    expect(api.processThread_(t)).toBe('keep');
+    expect(api.processThread_(t)).toBe('keep');
+    expect(t.calls).toEqual([]);
+    const served = api.listOutcomes_().map((o) => [o.messageId, o.kind, o.scheduledAt]);
+    expect(served.sort()).toEqual([
+      [invite.getHeader(), 'interview_invite', '2026-03-04T14:00'],
+      [offer.getHeader(), 'offer', null],
+    ].sort());
+  });
+
+  test('preview skips signals already queued or older than SYNC_SINCE', () => {
+    const queued = message('Interview with Acme', INVITE);
+    const old = message('Interview with Acme', INVITE);
+    old.getDate = () => new Date('2000-01-01T00:00:00Z');
+    const fresh = message('Re: Interview with Acme', OFFER);
+    const t = thread([], [queued, old, fresh]);
+    const { api, logs } = load([t], { ['signal:' + queued.getHeader()]: new Date().toISOString() });
+    api.preview();
+    const lines = logs.filter((l) => l.includes('would queue: '));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('"kind":"offer"');
+  });
+
   test('preview logs the signal it would queue and queues nothing', () => {
     const t = thread([], [message('Interview with Acme', INVITE)]);
     const { api, logs, scriptStore } = load([t]);

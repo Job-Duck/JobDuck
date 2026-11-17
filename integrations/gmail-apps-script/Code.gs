@@ -11,8 +11,8 @@
  * latest job message and every other message is a plain confirmation. Everything else (interview mail, a recruiter's
  * note, any sentence the script does not know) is kept: no label, no archive, left in the Inbox. Each rejection that
  * stands becomes an outcome (header fields and a job link/ID only; the email body never leaves Gmail) queued for the
- * web app. So does the message behind a kept thread's interview, assessment or offer signal, once, with its kind and
- * the date it states (if any).
+ * web app. So does every message behind a kept thread's interview, assessment or offer signal, once each, with its
+ * kind and the date it states (if any).
  *
  * Scope: the script only ever searches the Inbox (in:inbox), plus the "Job Duck/Applications" label when you run
  * previewReaudit/reauditApplications and the "Job Duck/Rejections" label when you run
@@ -162,7 +162,9 @@ function processThread_(thread) {
       unqueueOutcomes_(messages);
       thread.moveToInbox();
     }
-    if (d.signal && d.message.getDate() >= CONFIG.SYNC_SINCE) recordSignal_(d.message, d.reasons);
+    (d.signals || []).forEach(function (sig) {
+      if (sig.message.getDate() >= CONFIG.SYNC_SINCE) recordSignal_(sig.message, sig.reasons);
+    });
     return 'keep';
   }
 
@@ -212,17 +214,21 @@ function classifyThread_(messages, rules, me) {
   return { action: 'job', reasons: ['plain application confirmation'], message: latest.message };
 }
 
-/** A thread that is kept, with why: the interview signal of a message that is not a plain confirmation (or of a
- *  rejection that offers a conversation) when one has it, otherwise the first sentence that kept `note` out of the
- *  archive. */
+/** A thread that is kept, with why: the interview signal of the first message that is not a plain confirmation (or
+ *  of a rejection that offers a conversation) when one has it, otherwise the first sentence that kept `note` out of the
+ *  archive. `signals` lists every such message with a positive interview signal, in thread order, with its reasons. */
 function keptFor_(notes, note, why) {
   var reasons = why ? [why] : [];
+  var signals = [], first = null;
   for (var i = 0; i < notes.length; i++) {
     if (notes[i].plain || (notes[i].deny && rejectionStands_(notes[i].body))) continue;
     var iv = interviewScore(notes[i].body);
-    if (iv.positive) {
-      return { action: 'keep', signal: true, reasons: reasons.concat(iv.reasons), evidence: iv.evidence, message: notes[i].message };
-    }
+    if (!iv.positive) continue;
+    signals.push({ message: notes[i].message, reasons: iv.reasons });
+    if (!first) first = { iv: iv, message: notes[i].message };
+  }
+  if (first) {
+    return { action: 'keep', signals: signals, reasons: reasons.concat(first.iv.reasons), evidence: first.iv.evidence, message: first.message };
   }
   var action = actionIn_(note.subject, note.body);
   var odd = action || unacknowledged_(note.body);
@@ -326,7 +332,10 @@ function preview() {
       } else if (d.action === 'keep') {
         keeps++;
         Logger.log('KEEP ' + line);
-        if (d.signal) Logger.log('  would queue: ' + JSON.stringify(signalOutcome_(d.message, d.reasons)));
+        (d.signals || []).forEach(function (sig) {
+          if (sig.message.getDate() < CONFIG.SYNC_SINCE || signalMarked_(sig.message)) return;
+          Logger.log('  would queue: ' + JSON.stringify(signalOutcome_(sig.message, sig.reasons)));
+        });
       } else {
         jobs++;
       }
@@ -486,8 +495,8 @@ function recordRejection_(message) {
  *  'full' (not marked, so a later run tries again). */
 function recordSignal_(message, reasons) {
   var store = outcomeStore_();
+  if (signalMarked_(message)) return 'seen';
   var mark = SIGNAL_PREFIX + outcomeId_(message);
-  if (store.getProperty(mark) != null) return 'seen';
   var outcome = signalOutcome_(message, reasons);
   var r = queueOutcome_(outcome);
   if (r === 'full') return r;
@@ -495,6 +504,8 @@ function recordSignal_(message, reasons) {
   store.setProperty(mark, outcome.receivedAt);
   return r;
 }
+
+function signalMarked_(message) { return outcomeStore_().getProperty(SIGNAL_PREFIX + outcomeId_(message)) != null; }
 
 function signalOutcome_(message, reasons) {
   var outcome = buildOutcome_(message);

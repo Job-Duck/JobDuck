@@ -79,8 +79,9 @@ condition precedes it.
    with no application wording, job alerts, "new jobs for you" / recommended-jobs digests, referral invites,
    self-identification invites and unfinished-application reminders are not treated as job mail and are left alone.
 
-4. **Queues interview signals.** When a thread is kept because of an interview invite, an assessment or an offer, the
-   message with that signal is queued for `jobduck sync` too, with a `kind`: `offer` for an offer ("we are pleased to
+4. **Queues interview signals.** When a thread is kept because of an interview invite, an assessment or an offer, every
+   message in it with such a signal (an invite and a later offer in the same thread, say) is queued for `jobduck
+   sync` too, each with its own `kind` and `scheduledAt`. The `kind` is `offer` for an offer ("we are pleased to
    extend you an offer", an offer letter), else `assessment` for an assessment to complete, else `interview_invite`
    for any other invite, scheduling request, screen, round or booking link. A thread kept only because it mentions an
    interview ("I will share interview feedback with the team"), a rejection that offers a conversation, or a recruiter
@@ -148,7 +149,8 @@ recorded; acknowledged outcomes are deleted from the script. The agent never get
 5. Run `checkConnection`: it logs the mode (`serve`), the number of pending outcomes and whether `SYNC_TOKEN` is set.
 6. Run `preview` to log, with the same thread rules as the trigger, which Inbox threads would be treated as
    rejections and the outcome each would queue, and which would be kept untouched in the Inbox (`KEEP` lines with
-   the reason and body phrase, and the signal outcome a kept invite, assessment or offer would queue). Nothing is changed or queued. Up to four minutes on a large Inbox.
+   the reason and body phrase, and the signal outcome each kept invite, assessment or offer not yet queued would
+   queue). Nothing is changed or queued. Up to four minutes on a large Inbox.
 7. Run `install` to start the 10-minute trigger. It also renames the labels of earlier versions (`Job Applications`,
    `Deny Letters`) into the nested ones, deletes the old `JobDuck Sync` / `JobDuck Synced` / `JobDuck Review` labels
    and the interview label v5.2 created, and clears the push-mode queue left by v3/v4; threads keep their mail.
@@ -235,11 +237,11 @@ trigger are kept.
 
 ## Changelog
 
-- **v5.7**: A thread kept because of an interview invite, an assessment or an offer also queues that message for
-  `jobduck sync`, once, with `kind` (`interview_invite`, `assessment` or `offer`) and `scheduledAt` (the one date the
+- **v5.7**: A thread kept because of an interview invite, an assessment or an offer also queues each message with such
+  a signal for `jobduck sync`, once, with `kind` (`interview_invite`, `assessment` or `offer`) and `scheduledAt` (the one date the
   email states, else `null`); Job Duck asks you to confirm it on the dashboard unless `[track]
   auto_apply_interview_signals` is on. The thread is still left untouched in the Inbox, and rejections are unchanged.
-  `preview` logs the signal each kept invite would queue.
+  `preview` logs each signal not yet queued that a kept thread would queue.
 - **v5.6**: New `previewReauditRejections` / `reauditRejections` re-check the `Job Duck/Rejections` label and send
   every thread that no longer classifies as a rejection back to the Inbox, without the label and its queued outcome.
   The rejection allowlist stays an allowlist and gains more standard parts that ask nothing of the candidate: thanks
