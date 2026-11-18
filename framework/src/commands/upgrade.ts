@@ -5,7 +5,7 @@ import { PACKAGE_VERSION, discoverHome } from '../paths'
 import type { FetchLike } from '../sync/client'
 import { type DashboardRecord, restartDashboard } from './dashboard'
 
-export const RELEASE_REPO = 'ZaxShen/JobDuck'
+export const RELEASE_REPO = 'Job-Duck/JobDuck'
 export const CHECKSUMS_ASSET = 'SHA256SUMS'
 export const DEV_TAG = 'dev-latest'
 export const CHANNELS = ['stable', 'rc', 'dev'] as const

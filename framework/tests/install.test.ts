@@ -7,7 +7,7 @@ import {
   assetName, binaryName, expectedChecksum, install, newestReleaseTag, onPath, pathHint, resolveSource,
 } from '../scripts/install'
 
-const RELEASES = 'https://github.com/ZaxShen/JobDuck/releases'
+const RELEASES = 'https://github.com/Job-Duck/JobDuck/releases'
 const HASH = 'a'.repeat(64)
 const noNetwork = async (url: string): Promise<Response> => {
   throw new Error(`unexpected fetch ${url}`)
@@ -60,10 +60,10 @@ test('stable and dev channels map to fixed download bases', async () => {
 
 test('the rc channel takes the newest non-dev tag from the atom feed', async () => {
   const feed = [
-    '<link href="https://github.com/ZaxShen/JobDuck/releases/tag/dev-latest"/>',
-    '<link href="https://github.com/ZaxShen/JobDuck/releases/tag/v0.3.0-dev.4.gh40"/>',
-    '<link href="https://github.com/ZaxShen/JobDuck/releases/tag/v0.2.0-rc.2"/>',
-    '<link href="https://github.com/ZaxShen/JobDuck/releases/tag/v0.1.0"/>',
+    '<link href="https://github.com/Job-Duck/JobDuck/releases/tag/dev-latest"/>',
+    '<link href="https://github.com/Job-Duck/JobDuck/releases/tag/v0.3.0-dev.4.gh40"/>',
+    '<link href="https://github.com/Job-Duck/JobDuck/releases/tag/v0.2.0-rc.2"/>',
+    '<link href="https://github.com/Job-Duck/JobDuck/releases/tag/v0.1.0"/>',
   ].join('\n')
   const seen: string[] = []
   const source = await resolveSource({ JOBDUCK_CHANNEL: 'rc' }, async (url) => {
