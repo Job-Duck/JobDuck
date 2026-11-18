@@ -17,11 +17,11 @@
   "author": "Zax Shen",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZaxShen/JobDuck.git",
+    "url": "git+https://github.com/Job-Duck/JobDuck.git",
     "directory": "framework"
   },
-  "homepage": "https://github.com/ZaxShen/JobDuck#readme",
-  "bugs": "https://github.com/ZaxShen/JobDuck/issues",
+  "homepage": "https://github.com/Job-Duck/JobDuck#readme",
+  "bugs": "https://github.com/Job-Duck/JobDuck/issues",
   "type": "module",
   "scripts": {
     "build": "bun build --compile src/cli.ts --outfile dist/jobduck",
