@@ -60,10 +60,15 @@ export const ApplyManifest = z.object({
   answers: z.record(z.string(), z.string()).default(() => ({})),
 }).strict()
 
+export const DEFAULT_AUTO_SYNC_MINUTES = 15
+/** One day; also keeps the timer far below setTimeout's 32-bit limit. */
+export const MAX_AUTO_SYNC_MINUTES = 1440
+
 export const TrackSettings = z.looseObject({
   sync_url: z.string().default(''),
   sync_token: z.string().default(''),
   auto_apply_interview_signals: z.boolean().default(false),
+  auto_sync_minutes: z.number().int().nonnegative().max(MAX_AUTO_SYNC_MINUTES).default(DEFAULT_AUTO_SYNC_MINUTES),
 })
 
 export const CvSettings = z.looseObject({
@@ -112,6 +117,7 @@ const COMMENTS: Record<string, string> = {
   'apply.free_text': 'never | draft_for_approval | auto_from_profile',
   'apply.marker': 'paste the JobDuck-Application-Id marker into an editable field',
   'track.auto_apply_interview_signals': 'record synced interview, assessment and offer emails without asking to confirm',
+  'track.auto_sync_minutes': 'while jobduck dashboard runs, sync every N minutes (0 to 1440); 0 turns it off',
 }
 
 export function serializePermissions(permissions: Record<string, unknown>): string {

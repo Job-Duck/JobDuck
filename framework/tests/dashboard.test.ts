@@ -442,6 +442,19 @@ test('permissions: PUT saves, rejects unknown keys and stale revisions, and need
   expect((await get('/api/permissions')).body.permissions.modules.track).toBe(true)
 })
 
+test('/api/sync reports an unconfigured sync, and Sync now needs the dashboard header and gets 400', async () => {
+  const status = await get('/api/sync')
+  expect(status.res.status).toBe(200)
+  expect(status.body).toEqual({ configured: false, enabled: false, interval_minutes: 15, running: false, last: null })
+  const bare = await fetch(`${dash.url}/api/sync`, { method: 'POST' })
+  expect(bare.status).toBe(403)
+  const foreign = await mutate('POST', '/api/sync', undefined, { Origin: 'https://evil.example' })
+  expect(foreign.res.status).toBe(403)
+  const now = await mutate('POST', '/api/sync')
+  expect(now.res.status).toBe(400)
+  expect(now.body.error).toContain('not configured')
+})
+
 test('wizard payloads save Career DNA, targets and modules through PUT /api/profile and /api/permissions', () => {
   const ctx = { db, home: box.home }
   const call = (method: string, path: string, body?: unknown) =>

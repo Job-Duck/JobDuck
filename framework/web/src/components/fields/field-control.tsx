@@ -41,7 +41,7 @@ function Control({ id, field, value, onChange }: FieldControlProps & { id: strin
       )
     }
     case 'number':
-      return <NumberInput id={id} value={value} onChange={onChange} min={field.min} step={field.step} placeholder={field.placeholder} />
+      return <NumberInput id={id} value={value} onChange={onChange} min={field.min} max={field.max} step={field.step} placeholder={field.placeholder} />
     case 'tags':
       return <ChipInput id={id} label={field.label} value={asStrings(value)} onChange={onChange} placeholder={field.placeholder} suggest={field.suggest} />
     case 'checks':

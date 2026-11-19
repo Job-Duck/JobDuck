@@ -109,6 +109,30 @@ export interface Outcome {
   application_id: number | null
 }
 
+export interface SyncTotals {
+  fetched: number
+  matched: { total: number }
+  awaiting_confirm: number
+  needs_match: number
+  known: number
+  failed: number
+}
+
+export interface LastSync {
+  at: string
+  ok: boolean
+  error?: string
+  totals?: SyncTotals
+}
+
+export interface SyncStatus {
+  configured: boolean
+  enabled: boolean
+  interval_minutes: number
+  running: boolean
+  last: LastSync | null
+}
+
 export interface Summary {
   counts: Record<string, number>
   needs_match: number

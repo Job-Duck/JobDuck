@@ -46,6 +46,7 @@ disability_status = "decline"       # decline | no | yes
 sync_url = ""
 sync_token = ""
 auto_apply_interview_signals = false # record synced interview, assessment and offer emails without asking to confirm
+auto_sync_minutes = 15              # while jobduck dashboard runs, sync every N minutes (0 to 1440); 0 turns it off
 
 [cv]
 page_limit = 2

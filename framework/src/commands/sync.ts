@@ -8,7 +8,9 @@ import {
   listLiveApplicationsForMatching, markSynced, setNeedsMatch,
 } from '../db/outcomes'
 import { NoHomeError, dbPath, discoverHome, permissionsPath, resolveWorkspace } from '../paths'
-import { type FetchLike, type InvalidOutcome, type SyncOutcome, createSyncClient } from '../sync/client'
+import {
+  type FetchLike, type InvalidOutcome, SyncAuthError, type SyncClient, type SyncOutcome, createSyncClient,
+} from '../sync/client'
 import { type MatchDecision, type MatchKind, type ScoredCandidate, markerId, matchOutcome as decideMatch } from '../sync/match'
 
 export interface SyncOptions {
@@ -50,13 +52,14 @@ const MATCH_KINDS: MatchKind[] = ['marker', 'url', 'ref', 'company_title']
 const SETUP_HINT = 'jobduck sync is not configured: turn on the track module and set [track] sync_url and sync_token '
   + '(ask your agent to run the setup skill with --module track).'
 
-interface SyncConfig {
+export interface SyncConfig {
   url: string
   token: string
   autoApply: boolean
 }
 
-function configured(home: string): SyncConfig | null {
+/** The `[track]` sync settings, or null when the track module is off or `sync_url` / `sync_token` is empty. */
+export function syncConfig(home: string): SyncConfig | null {
   try {
     const permissions = loadPermissions(permissionsPath(home))
     const { sync_url: url, sync_token: token, auto_apply_interview_signals: autoApply } = permissions.track
@@ -172,6 +175,99 @@ function openForPlan(home: string): Db | null {
   return existsSync(path) ? openDb(path, { readonly: true }) : null
 }
 
+function openForStore(home: string): Db {
+  const db = openDb(dbPath(home))
+  try {
+    migrate(db)
+  } catch (error) {
+    db.close()
+    throw error
+  }
+  return db
+}
+
+/** An open database the caller keeps (the dashboard), or an opener whose database syncOnce closes when done (the CLI). */
+export type SyncTarget = Db | (() => Db | null)
+
+export interface SyncOnceOptions {
+  dryRun?: boolean
+  fetch?: FetchLike
+  /** Called with each problem line as it happens; the same lines end up in `errors`. */
+  err?: (line: string) => void
+}
+
+export interface SyncRun {
+  dryRun: boolean
+  scriptVersion: string
+  rows: SyncRow[]
+  totals: SyncTotals
+  acked: number
+  errors: string[]
+  /** The ack was refused as unauthorized; a refused fetch throws SyncAuthError instead. */
+  authRejected: boolean
+}
+
+async function storeAndAck(db: Db, client: SyncClient, outcomes: SyncOutcome[], autoApply: boolean, fail: (line: string) => void) {
+  const rows: SyncRow[] = []
+  const stored: { messageId: string; outcomeId: number }[] = []
+  for (const outcome of outcomes) {
+    try {
+      const result = store(db, outcome, autoApply)
+      rows.push(result.row)
+      stored.push({ messageId: outcome.messageId, outcomeId: result.outcomeId })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      rows.push({ ...baseRow(outcome), result: 'failed', error: message })
+      fail(`could not store outcome ${outcome.messageId}: ${message}`)
+    }
+  }
+  let acked = 0
+  let authRejected = false
+  if (stored.length > 0) {
+    try {
+      acked = await client.ack(stored.map((entry) => entry.messageId))
+      markSynced(db, stored.map((entry) => entry.outcomeId), nowIso())
+    } catch (error) {
+      authRejected = error instanceof SyncAuthError
+      fail(error instanceof Error ? error.message : String(error))
+    }
+  }
+  return { rows, acked, authRejected }
+}
+
+/**
+ * One sync: fetch the queued outcomes, store and match each (only plan them with dryRun), then acknowledge the stored
+ * ones. Throws when the fetch fails (SyncAuthError for a rejected token); read, store and ack problems come back in
+ * `errors`. Shared by `jobduck sync` and the dashboard's auto-sync.
+ */
+export async function syncOnce(target: SyncTarget, config: SyncConfig, options: SyncOnceOptions = {}): Promise<SyncRun> {
+  const dryRun = options.dryRun ?? false
+  const errors: string[] = []
+  const fail = (line: string) => {
+    errors.push(line)
+    options.err?.(line)
+  }
+  const client = createSyncClient({ url: config.url, token: config.token, fetch: options.fetch })
+  const { scriptVersion, outcomes, invalid } = await client.pending()
+  for (const entry of invalid) fail(`could not read outcome ${entry.messageId || '(no messageId)'}: ${entry.error}`)
+
+  const owned = typeof target === 'function'
+  const db = owned ? target() : target
+  let rows: SyncRow[]
+  let acked = 0
+  let authRejected = false
+  try {
+    if (dryRun) rows = plan(db, outcomes, config.autoApply)
+    else if (db === null) throw new Error('sync needs a database to store outcomes in')
+    else ({ rows, acked, authRejected } = await storeAndAck(db, client, outcomes, config.autoApply, fail))
+  } finally {
+    if (owned) db?.close()
+  }
+
+  rows.push(...invalid.map(invalidRow))
+  return { dryRun, scriptVersion, rows, totals: totalsOf(rows), acked, errors, authRejected }
+}
+
 export async function runSync(options: SyncOptions = {}): Promise<number> {
   const out = options.out ?? ((line: string) => console.log(line))
   const err = options.err ?? ((line: string) => console.error(line))
@@ -183,79 +279,26 @@ export async function runSync(options: SyncOptions = {}): Promise<number> {
   }
   const dryRun = options.dryRun ?? false
 
-  const config = configured(home)
+  const config = syncConfig(home)
   if (config === null) {
     err(SETUP_HINT)
     return 2
   }
-  const client = createSyncClient({ url: config.url, token: config.token, fetch: options.fetch })
 
-  let scriptVersion: string
-  let outcomes: SyncOutcome[]
-  let invalid: InvalidOutcome[]
+  let run: SyncRun
   try {
-    const pending = await client.pending()
-    scriptVersion = pending.scriptVersion
-    outcomes = pending.outcomes
-    invalid = pending.invalid
+    run = await syncOnce(() => (dryRun ? openForPlan(home) : openForStore(home)), config, { dryRun, fetch: options.fetch, err })
   } catch (error) {
     err(error instanceof Error ? error.message : String(error))
     return 1
   }
 
-  let rows: SyncRow[]
-  let acked = 0
-  let exitCode = 0
-  for (const entry of invalid) {
-    err(`could not read outcome ${entry.messageId || '(no messageId)'}: ${entry.error}`)
-    exitCode = 1
-  }
-  if (dryRun) {
-    const db = openForPlan(home)
-    try {
-      rows = plan(db, outcomes, config.autoApply)
-    } finally {
-      db?.close()
-    }
-  } else {
-    const db = openDb(dbPath(home))
-    try {
-      migrate(db)
-      rows = []
-      const stored: { messageId: string; outcomeId: number }[] = []
-      for (const outcome of outcomes) {
-        try {
-          const result = store(db, outcome, config.autoApply)
-          rows.push(result.row)
-          stored.push({ messageId: outcome.messageId, outcomeId: result.outcomeId })
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          rows.push({ ...baseRow(outcome), result: 'failed', error: message })
-          err(`could not store outcome ${outcome.messageId}: ${message}`)
-          exitCode = 1
-        }
-      }
-      if (stored.length > 0) {
-        try {
-          acked = await client.ack(stored.map((entry) => entry.messageId))
-          markSynced(db, stored.map((entry) => entry.outcomeId), nowIso())
-        } catch (error) {
-          err(error instanceof Error ? error.message : String(error))
-          exitCode = 1
-        }
-      }
-    } finally {
-      db.close()
-    }
-  }
-
-  rows.push(...invalid.map(invalidRow))
-  const totals = totalsOf(rows)
+  const { scriptVersion, rows, totals, acked } = run
   if (options.json) {
     out(JSON.stringify({ dryRun, scriptVersion, outcomes: rows, totals, acked }, null, 2))
   } else {
     if (dryRun) out('Dry run: nothing stored or acknowledged.')
     printTable(rows, totals, dryRun, out)
   }
-  return exitCode
+  return run.errors.length > 0 ? 1 : 0
 }
