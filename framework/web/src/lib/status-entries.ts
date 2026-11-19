@@ -1,3 +1,6 @@
+import { followUpSentLabel } from './follow-ups'
+import { statusLabel } from './format'
+import { kindLabel, outcomeLabel, scheduledLabel, stageTypeLabel } from './stages'
 import type { ApplicationEvent, StageKind, StageTypes } from './types'
 
 export const CLOSE_TARGETS = ['deny_by_employer', 'deny_by_candidate', 'no_response'] as const
@@ -85,6 +88,85 @@ function dateValue(value: string): number {
 
 export function timelineOrder<T extends ApplicationEvent>(events: readonly T[]): T[] {
   return [...events].sort((a, b) => dateValue(effectiveDate(b)) - dateValue(effectiveDate(a)) || b.id - a.id)
+}
+
+export interface TimelineGroup<T extends ApplicationEvent = ApplicationEvent> {
+  head: T
+  updates: T[]
+}
+
+export type TimelineItem<T extends ApplicationEvent = ApplicationEvent> = T | TimelineGroup<T>
+
+export const isTimelineGroup = <T extends ApplicationEvent>(item: TimelineItem<T>): item is TimelineGroup<T> => 'head' in item
+
+const isStatusEvent = (event: ApplicationEvent) => event.kind === null && event.stage_type === null
+const isPendingUpdate = (event: ApplicationEvent) =>
+  isStatusEvent(event) && event.from_status === 'pending' && event.to_status === 'pending'
+const startsPending = (event: ApplicationEvent) =>
+  isStatusEvent(event) && event.to_status === 'pending' && event.from_status !== 'pending'
+
+export const groupLatest = <T extends ApplicationEvent>(group: TimelineGroup<T>): T => group.updates.at(-1) ?? group.head
+
+export function groupTimeline<T extends ApplicationEvent>(events: readonly T[]): TimelineItem<T>[] {
+  const byLatest = new Map<number, TimelineGroup<T>>()
+  const folded = new Set<number>()
+  const keep = (group: TimelineGroup<T> | null) => {
+    if (!group || group.updates.length === 0) return
+    for (const member of [group.head, ...group.updates]) folded.add(member.id)
+    byLatest.set(groupLatest(group).id, group)
+  }
+  let open: TimelineGroup<T> | null = null
+  for (const event of [...events].sort((a, b) => a.id - b.id)) {
+    if (!isStatusEvent(event)) continue
+    if (open && isPendingUpdate(event)) {
+      open.updates.push(event)
+      continue
+    }
+    keep(open)
+    open = startsPending(event) ? { head: event, updates: [] } : null
+  }
+  keep(open)
+  const items: TimelineItem<T>[] = []
+  for (const event of timelineOrder(events)) {
+    const group = byLatest.get(event.id)
+    if (group) items.push(group)
+    else if (!folded.has(event.id)) items.push(event)
+  }
+  return items
+}
+
+export const groupNote = (group: TimelineGroup): string | null =>
+  [group.head, ...group.updates].reduce<string | null>((note, event) => event.note ?? note, null)
+
+export const itemHolds = (item: TimelineItem, id: number | null): boolean =>
+  id !== null && (isTimelineGroup(item) ? [item.head, ...item.updates].some((event) => event.id === id) : item.id === id)
+
+const isStageEvent = (event: ApplicationEvent) =>
+  event.stage_type !== null && (event.to_status === 'interviewing' || event.to_status === 'offered')
+
+export const PENDING_GROUP_LABEL = 'Pending'
+
+export function timelineLabel(event: ApplicationEvent): string {
+  if (event.kind !== null) return followUpSentLabel(event.kind)
+  if (isStageEvent(event)) {
+    return [kindLabel(event.to_status as StageKind), stageTypeLabel(event.stage_type ?? ''), event.outcome && outcomeLabel(event.outcome)]
+      .filter(Boolean).join(' · ')
+  }
+  if (isPendingUpdate(event)) return 'Pending reason updated'
+  return event.from_status
+    ? `${statusLabel(event.from_status)} → ${statusLabel(event.to_status)}`
+    : `Created as ${statusLabel(event.to_status)}`
+}
+
+export function timeRangeLabel(from: string, to: string): string {
+  const start = scheduledLabel(from)
+  const end = scheduledLabel(to)
+  if (start === end) return start
+  if (!DATE_ONLY.test(from) && !DATE_ONLY.test(to)) {
+    const last = new Date(to)
+    if (new Date(from).toDateString() === last.toDateString()) return `${start}–${last.toLocaleTimeString()}`
+  }
+  return `${start} – ${end}`
 }
 
 export const isEditableEntry = (event: ApplicationEvent) => !isStageEntry(event)

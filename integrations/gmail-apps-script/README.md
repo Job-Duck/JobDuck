@@ -131,9 +131,9 @@ recorded; acknowledged outcomes are deleted from the script. The agent never get
 1. Open [script.google.com](https://script.google.com/home) and click **New project**; rename it
    `Job Duck - Gmail Rejection Sync v5.7`. In **Project Settings**, tick **Show "appsscript.json" manifest file in
    editor**. Back in the **Editor**, replace the contents of `appsscript.json` with
-   [`appsscript.json`](https://github.com/ZaxShen/JobDuck/blob/main/integrations/gmail-apps-script/appsscript.json)
+   [`appsscript.json`](https://github.com/Job-Duck/JobDuck/blob/main/integrations/gmail-apps-script/appsscript.json)
    and of `Code.gs` with
-   [`Code.gs`](https://github.com/ZaxShen/JobDuck/blob/main/integrations/gmail-apps-script/Code.gs) (open each and
+   [`Code.gs`](https://github.com/Job-Duck/JobDuck/blob/main/integrations/gmail-apps-script/Code.gs) (open each and
    click **Raw** to copy), then **Save** (Cmd/Ctrl+S). Optional script properties (**Project Settings → Script Properties → Add script property**, then
    **Save script properties**): `PROTECTED_LABELS` and `EXCLUDED_DOMAINS` (comma-separated),
    `KEEP_ACTION_MAIL_IN_INBOX=true` (a no-op since v5.4: verification-code mail always stays in the Inbox).
