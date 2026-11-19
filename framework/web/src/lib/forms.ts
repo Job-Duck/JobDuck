@@ -191,6 +191,17 @@ export const SETTINGS_GROUPS: Group[] = [
     ],
   },
   {
+    title: 'Scheduled Runs',
+    help: 'A daily run of your agent with nobody watching. Run jobduck schedule install in a terminal once to add the job to your computer; jobduck schedule remove takes it away.',
+    when: flag('modules.find'),
+    fields: [
+      { key: 'schedule.enabled', label: 'Run On A Timer', type: 'switch', help: 'Off pauses scheduled runs; the job on your computer stays until you remove it.' },
+      { key: 'schedule.time', label: 'Time Of Day', placeholder: '08:00', help: "24-hour HH:MM in your computer's time. Run jobduck schedule install again after changing it." },
+      { key: 'schedule.mode', label: 'What It Does', type: 'select', options: [['find_only', 'Find postings and save a shortlist'], ['apply', 'Apply, within the Applying settings']], help: 'Apply submits on its own only after enough approvals; everything else is saved as pending for you.' },
+      { key: 'schedule.host', label: 'Agent', type: 'select', options: [['claude', 'Claude Code'], ['codex', 'Codex CLI'], ['gemini', 'Gemini CLI']], help: 'Empty: the first agent registered in this workspace, else Claude Code.' },
+    ],
+  },
+  {
     title: 'CVs',
     when: flag('modules.cv'),
     fields: [{ key: 'cv.page_limit', label: 'Page Limit', type: 'number', min: 1 }],

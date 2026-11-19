@@ -13,6 +13,7 @@ End to end: shortlist, dedupe, pick the CV, fill the form in the browser, pass t
 
 - `apply`: discover with the find skill, then work through the shortlist.
 - `apply <url> [<url> ...]`: skip discovery and process these postings.
+- A scheduled unattended run: the prompt starts `Job Duck scheduled run, mode: apply`. Follow Unattended below as well as every other rule here.
 
 ## Inputs
 
@@ -32,6 +33,14 @@ Then, before any new work, call `list_applications` with `status: ["pending", "s
 ### Stops
 
 Whenever you stop on an application you cannot finish alone (a CAPTCHA, an SMS code, an emailed code step 5 does not fill, a question the profile and manifest cannot answer, a login or account wall, a near-duplicate awaiting the user's call, approval not given yet), record it as `pending` instead of only telling the user: `update_status` with `status: "pending"` if it is already recorded (only while it is still `saved` or `pending`; an application never moves back from `applied`), else `record_application` with step 3's fields and `status: "pending"`. Either way pass a one-sentence `pending_reason` naming what the user must do, e.g. `Enter the code Acme emailed you, then tell me to continue.` Tell the user what is needed and move on to the next item in every autonomy mode; when the user answers, resume it in this run, else step 0 picks it up next run.
+
+### Unattended
+
+In a scheduled run nobody is watching:
+- Never pause for input or ask a question. Every stop (a CAPTCHA, an SMS code, an emailed code step 5 does not fill, a near-duplicate, a question the profile and manifest cannot answer, a consent whose key is false, a login wall, a free-text draft awaiting approval) is recorded as `pending` per Stops with its `pending_reason`; then move on. Save no new `[apply.answers]` entry.
+- Submit only when `autonomy` is `auto_after_approvals` and step 6's count already meets `approvals_before_auto` (with no `Approval: corrected` among the latest); record those per step 7 with `Approval: auto`. Otherwise do not open the form: save the application as `pending` with `pending_reason` `Scheduled run: review this posting, then tell me to apply.`
+- Respect `max_per_run`. CAPTCHAs and SMS codes always stop, in every mode.
+- Discover with the find skill using the prompt's `posted_within_days`, and end with step 8's report.
 
 ### 1. Discover
 

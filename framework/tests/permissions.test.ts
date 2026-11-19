@@ -57,6 +57,7 @@ test('permissions template parses with every module off and safe defaults', () =
   expect(permissions.apply).toEqual(SAFE_APPLY)
   expect(permissions.track).toEqual({ sync_url: '', sync_token: '', auto_apply_interview_signals: false, auto_sync_minutes: 15 })
   expect(permissions.cv).toEqual({ page_limit: 2 })
+  expect(permissions.schedule).toEqual({ enabled: false, time: '08:00', mode: 'find_only' })
 })
 
 test('an empty permissions file gets the same safe defaults', () => {
@@ -180,6 +181,23 @@ test('auto_sync_minutes defaults to 15, 0 parses as off, and negatives, fraction
   const template = readFileSync(join(import.meta.dir, '..', 'templates', 'permissions.toml'), 'utf8')
   expect(template).toMatch(/^auto_sync_minutes = 15 +# while jobduck dashboard runs/m)
   expect(parsePermissions(template).track.auto_sync_minutes).toBe(15)
+})
+
+test('[schedule] defaults to off at 08:00 in find_only with no host, and checks time, mode and host', () => {
+  expect(parsePermissions('').schedule).toEqual({ enabled: false, time: '08:00', mode: 'find_only' })
+  const set = parsePermissions('[schedule]\nenabled = true\ntime = "21:05"\nmode = "apply"\nhost = "codex"\n').schedule
+  expect(set).toEqual({ enabled: true, time: '21:05', mode: 'apply', host: 'codex' })
+  for (const bad of [
+    'time = "8:00"', 'time = "24:00"', 'time = "08:60"', 'mode = "submit_all"', 'host = "cursor"', 'enabled = "yes"', 'every = 2',
+  ]) expect(() => parsePermissions(`[schedule]\n${bad}\n`)).toThrow()
+  const text = serializePermissions(parsePermissions('[schedule]\nmode = "apply"\nhost = "gemini"\n'))
+  expect(text).toMatch(/^mode = "apply" {2}# find_only \| apply$/m)
+  expect(text).toMatch(/^host = "gemini" {2}# claude \| codex \| gemini$/m)
+  const template = readFileSync(join(import.meta.dir, '..', 'templates', 'permissions.toml'), 'utf8')
+  expect(template).toMatch(/^enabled = false +# set by jobduck schedule install/m)
+  expect(template).toMatch(/^time = "08:00" +# HH:MM, local time$/m)
+  expect(template).toMatch(/^mode = "find_only" +# find_only \| apply$/m)
+  expect(parsePermissions(template).schedule).toEqual({ enabled: false, time: '08:00', mode: 'find_only' })
 })
 
 test('profile template parses front matter and keeps the body', () => {

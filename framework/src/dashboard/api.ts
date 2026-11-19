@@ -25,9 +25,11 @@ import {
   OUTCOME_STATUSES, type Outcome, alreadyRecorded, confirmOutcome, dismissOutcome, getOutcome, isSignalKind, listOutcomes,
   matchOutcome, notAwaitingConfirm,
 } from '../db/outcomes'
+import { lastRun } from '../db/scheduled-runs'
 import { IMPORT_EXTENSIONS } from '../onboarding/ledger'
 import { onboardingStatus, workspaceOf } from '../onboarding/status'
 import { permissionsPath, profilePath } from '../paths'
+import { readSchedule } from '../schedule/settings'
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) {
@@ -394,6 +396,11 @@ function permissionsView(home: string) {
   return { ...readStoredPermissions(permissionsPath(home)), path: permissionsPath(home) }
 }
 
+/** Read-only: the `[schedule]` settings (with the host a run would use) and the latest scheduled run, or null. */
+function scheduleView(db: Db, home: string, workspace: string | undefined) {
+  return { settings: readSchedule(home, workspace ?? workspaceOf(home)), last_run: lastRun(db) ?? null }
+}
+
 function saving<T>(fn: () => T): T {
   try {
     return fn()
@@ -442,6 +449,7 @@ const routes: { method: string; pattern: RegExp; handler: Handler }[] = [
     handler: () => ({ interviewing: INTERVIEW_STAGES, offered: OFFER_STAGES, outcomes: STAGE_OUTCOMES }),
   },
   { method: 'GET', pattern: /^\/api\/follow-ups$/, handler: ({ db }) => followUpsDue(db) },
+  { method: 'GET', pattern: /^\/api\/schedule$/, handler: ({ db, home, workspace }) => scheduleView(db, home, workspace) },
   {
     method: 'GET', pattern: /^\/api\/applications$/,
     handler: ({ db }, req) => listApplicationsWithPostings(db, { limit: 500, ...parse(listQuerySchema, queryObject(req.query)) }),

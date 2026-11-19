@@ -54,4 +54,5 @@ export const claudeCode: Host = {
       claudeMdPointer(ctx),
       ...skillPointers(join(ctx.workspace, '.claude', 'skills'), homeLabel(ctx), (tier) => CLAUDE_MODELS[tier]),
     ], ctx.dryRun),
+  headless: (prompt) => ['claude', '-p', prompt],
 }

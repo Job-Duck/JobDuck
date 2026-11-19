@@ -28,4 +28,5 @@ export const gemini: Host = {
       agentsPointer(ctx),
       geminiMdPointer(ctx),
     ], ctx.dryRun),
+  headless: (prompt) => ['gemini', '-p', prompt],
 }

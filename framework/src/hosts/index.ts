@@ -41,6 +41,8 @@ export interface Host {
   detect(ctx: HostContext): boolean
   isRegistered(ctx: HostContext): boolean
   register(ctx: HostContext): FileChange[]
+  /** argv that runs the host non-interactively on one prompt, within the user's own permission settings (never a bypass flag). */
+  headless(prompt: string): string[]
 }
 
 export const userHomeOf = (ctx: Pick<HostContext, 'userHome'>) => ctx.userHome ?? homedir()

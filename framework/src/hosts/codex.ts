@@ -86,4 +86,5 @@ export const codex: Host = {
       agentsPointer(ctx),
       ...skillPointers(join(ctx.workspace, '.agents', 'skills'), homeLabel(ctx)),
     ], ctx.dryRun),
+  headless: (prompt) => ['codex', 'exec', prompt],
 }

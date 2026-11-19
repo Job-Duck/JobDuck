@@ -50,3 +50,10 @@ auto_sync_minutes = 15              # while jobduck dashboard runs, sync every N
 
 [cv]
 page_limit = 2
+
+[schedule]
+# jobduck schedule install adds a daily job to your OS scheduler that runs your agent unattended.
+enabled = false                     # set by jobduck schedule install / remove; false pauses scheduled runs
+time = "08:00"                      # HH:MM, local time
+mode = "find_only"                  # find_only | apply
+# host = "claude"                   # claude | codex | gemini; unset: the first host registered for the workspace, else claude

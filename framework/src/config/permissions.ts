@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { parse, stringify } from 'smol-toml'
 import { z } from 'zod'
 import { TEMPLATES } from '../assets'
+import { SCHEDULE_MODES } from '../db/scheduled-runs'
+import { HOST_IDS } from '../hosts'
 import { permissionsPath } from '../paths'
 import { checkRevision, parseOrExplain, readOr, revisionOf, writePrivateFile } from './files'
 
@@ -75,11 +77,24 @@ export const CvSettings = z.looseObject({
   page_limit: z.number().int().positive().default(2),
 })
 
+export const SCHEDULE_TIME = /^([01]\d|2[0-3]):[0-5]\d$/
+
+/** `[schedule]`: `jobduck schedule install` / `remove` set `enabled`; an unset `host` means the first registered one. */
+export const ScheduleSettings = z.object({
+  enabled: z.boolean().default(false),
+  time: z.string().regex(SCHEDULE_TIME, 'must be HH:MM (24-hour, local time)').default('08:00'),
+  mode: z.enum(SCHEDULE_MODES).default('find_only'),
+  host: z.enum(HOST_IDS).optional(),
+}).strict()
+
+export type ScheduleSettings = z.infer<typeof ScheduleSettings>
+
 export const Permissions = z.object({
   modules: Modules.default(() => Modules.parse({})),
   apply: ApplyManifest.default(() => ApplyManifest.parse({})),
   track: TrackSettings.default(() => TrackSettings.parse({})),
   cv: CvSettings.default(() => CvSettings.parse({})),
+  schedule: ScheduleSettings.default(() => ScheduleSettings.parse({})),
 })
 
 export type Permissions = z.infer<typeof Permissions>
@@ -118,6 +133,10 @@ const COMMENTS: Record<string, string> = {
   'apply.marker': 'paste the JobDuck-Application-Id marker into an editable field',
   'track.auto_apply_interview_signals': 'record synced interview, assessment and offer emails without asking to confirm',
   'track.auto_sync_minutes': 'while jobduck dashboard runs, sync every N minutes (0 to 1440); 0 turns it off',
+  'schedule.enabled': 'set by jobduck schedule install / remove; false pauses scheduled runs',
+  'schedule.time': 'HH:MM, local time',
+  'schedule.mode': 'find_only | apply',
+  'schedule.host': 'claude | codex | gemini',
 }
 
 export function serializePermissions(permissions: Record<string, unknown>): string {

@@ -18,14 +18,16 @@ import { bulkSummary } from '@/lib/bulk'
 import { FOLLOW_UPS_PATH } from '@/lib/follow-ups'
 import { statusLabel } from '@/lib/format'
 import { BULK_TARGETS, type DialogScope, type StatusEntry, statusRequest } from '@/lib/status-entries'
+import { SCHEDULE_PATH } from '@/lib/schedule'
 import { SYNC_PATH } from '@/lib/sync'
-import type { ApplicationRow, FollowUps, Outcome, StageTypes, Summary, SyncStatus } from '@/lib/types'
+import type { ApplicationRow, FollowUps, Outcome, ScheduleStatus, StageTypes, Summary, SyncStatus } from '@/lib/types'
 import { ApplicationBoard } from '@/views/applications/application-board'
 import { ApplicationList } from '@/views/applications/application-list'
 import { ApplicationSheet } from '@/views/applications/application-sheet'
 import { FollowUpsCard } from '@/views/applications/follow-ups-card'
 import { OutcomeItem } from '@/views/applications/outcome-item'
 import { SignalItem } from '@/views/applications/signal-item'
+import { ScheduleCard } from '@/views/applications/schedule-card'
 import { SelectionToolbar } from '@/views/applications/selection-toolbar'
 import { SyncStatusBar } from '@/views/applications/sync-status'
 import { StatusDialog, type StatusDialogRequest, sendStatus } from '@/views/applications/status-dialog'
@@ -115,6 +117,7 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
   const [signals, setSignals] = useState<Outcome[]>([])
   const [followUps, setFollowUps] = useState<FollowUps | null>(null)
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
+  const [schedule, setSchedule] = useState<ScheduleStatus | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set())
@@ -130,6 +133,7 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
     try {
       void fetchJSON<FollowUps>(FOLLOW_UPS_PATH).then(setFollowUps, () => setFollowUps(null))
       void fetchJSON<SyncStatus>(SYNC_PATH).then(setSyncStatus, () => setSyncStatus(null))
+      void fetchJSON<ScheduleStatus>(SCHEDULE_PATH).then(setSchedule, () => setSchedule(null))
       const [nextSummary, nextRows, nextOutcomes, nextSignals] = await Promise.all([
         fetchJSON<Summary>('/api/summary'),
         fetchJSON<ApplicationRow[]>(applicationsPath({ status: filter, q, limit: APPLICATIONS_FETCH_LIMIT })),
@@ -317,6 +321,7 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
       <p className="text-sm text-muted-foreground">Everything your agent saved, applied to or is waiting on you for, newest first.</p>
       <OnboardingBanner page="applications" active={active} />
       <FollowUpsCard data={followUps} onOpen={setSelected} />
+      <ScheduleCard status={schedule} />
 
       <div className="flex flex-wrap items-center gap-3">
         <Select items={items} value={filter} onValueChange={(value: string | null) => changeFilter(value ?? '')}>
