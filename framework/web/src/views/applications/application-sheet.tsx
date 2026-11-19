@@ -14,17 +14,18 @@ import { StatusBadge } from '@/components/status-badge'
 import { useFlash } from '@/hooks/use-flash'
 import { POLL_MS, isVisible } from '@/hooks/use-visible-poll'
 import { type SaveResult, deleteJSON, errorMessage, fetchJSON, isConflict, patchJSON, postJSON } from '@/lib/api'
-import { followUpSentLabel } from '@/lib/follow-ups'
-import { postingPay, safeUrl, statusLabel } from '@/lib/format'
-import { kindLabel, outcomeLabel, stageTypeLabel } from '@/lib/stages'
-import { type DialogScope, type StatusEntry, statusRequest, timelineOrder, undoableEntryId } from '@/lib/status-entries'
-import type { ApplicationEvent, ApplicationRow, Stage, StageKind, StageTypes } from '@/lib/types'
+import { postingPay, safeUrl } from '@/lib/format'
+import {
+  type DialogScope, type StatusEntry, groupTimeline, isTimelineGroup, statusRequest, timelineLabel, undoableEntryId,
+} from '@/lib/status-entries'
+import type { ApplicationEvent, ApplicationRow, Stage, StageTypes } from '@/lib/types'
 import { AddStageForm } from '@/views/applications/add-stage-form'
 import { PAY_FIELDS, type PayKey, PaySection } from '@/views/applications/pay-section'
 import { StageCard } from '@/views/applications/stage-card'
 import { StatusActionsMenu } from '@/views/applications/status-actions-menu'
 import { StatusDialog, type StatusDialogRequest, sendStatus } from '@/views/applications/status-dialog'
 import { TimelineEntry } from '@/views/applications/timeline-entry'
+import { TimelineGroup } from '@/views/applications/timeline-group'
 
 const OVERRIDES = [
   ['title', 'Title'],
@@ -57,20 +58,6 @@ const storedText = (app: ApplicationRow, key: FieldKey) => (app[key] === null ? 
 const formOf = (app: ApplicationRow | null) =>
   Object.fromEntries(FIELD_KEYS.map((key) => [key, app ? storedText(app, key) : ''])) as Form
 const parsePay = (text: string) => (/^\d+$/.test(text) ? Number(text) : null)
-
-const isStageEvent = (event: ApplicationEvent) =>
-  event.stage_type !== null && (event.to_status === 'interviewing' || event.to_status === 'offered')
-
-function eventLabel(event: ApplicationEvent): string {
-  if (event.kind !== null) return followUpSentLabel(event.kind)
-  if (isStageEvent(event)) {
-    return [kindLabel(event.to_status as StageKind), stageTypeLabel(event.stage_type ?? ''), event.outcome && outcomeLabel(event.outcome)]
-      .filter(Boolean).join(' · ')
-  }
-  return event.from_status
-    ? `${statusLabel(event.from_status)} → ${statusLabel(event.to_status)}`
-    : `Created as ${statusLabel(event.to_status)}`
-}
 
 interface Detail {
   application: ApplicationRow
@@ -216,6 +203,10 @@ export function ApplicationSheet({ id, terminal, onClose, onChanged }: Applicati
     if (result !== 'failed') setConfirming(false)
   }
 
+  const saveEntry = (eventId: number, body: Record<string, unknown>) =>
+    run(() => patchJSON(`/api/events/${eventId}`, body), 'Entry saved.')
+  const undoEntry = (eventId: number) => run(() => deleteJSON(`/api/events/${eventId}`, expected()), 'Entry undone.')
+
   const app = detail?.application.id === id ? detail.application : null
   const undoable = detail ? undoableEntryId(detail.events) : null
 
@@ -342,17 +333,26 @@ export function ApplicationSheet({ id, terminal, onClose, onChanged }: Applicati
             <div className="space-y-3">
               <h3 className="text-sm font-medium">Timeline</h3>
               <ol className="space-y-3 border-l pl-4">
-                {timelineOrder(detail.events).map((event) => (
-                  <TimelineEntry
-                    key={event.id}
-                    event={event}
-                    label={eventLabel(event)}
-                    undoable={event.id === undoable}
+                {groupTimeline(detail.events).map((item) => (isTimelineGroup(item) ? (
+                  <TimelineGroup
+                    key={`group-${item.head.id}`}
+                    group={item}
+                    undoable={undoable}
                     openVersion={openVersion}
-                    onSave={(body) => run(() => patchJSON(`/api/events/${event.id}`, body), 'Entry saved.')}
-                    onUndo={() => run(() => deleteJSON(`/api/events/${event.id}`, expected()), 'Entry undone.')}
+                    onSave={saveEntry}
+                    onUndo={undoEntry}
                   />
-                ))}
+                ) : (
+                  <TimelineEntry
+                    key={item.id}
+                    event={item}
+                    label={timelineLabel(item)}
+                    undoable={item.id === undoable}
+                    openVersion={openVersion}
+                    onSave={(body) => saveEntry(item.id, body)}
+                    onUndo={() => undoEntry(item.id)}
+                  />
+                )))}
               </ol>
             </div>
             <Button type="button" variant="destructive" className="w-full" onClick={() => setConfirming(true)}>
