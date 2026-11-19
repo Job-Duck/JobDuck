@@ -1,6 +1,6 @@
 // Install the jobduck binary from GitHub Releases into a user directory (no root needed).
-// macOS/Linux: curl -fsSL https://raw.githubusercontent.com/ZaxShen/JobDuck/main/framework/scripts/install.ts | bun run -
-// Windows:     irm https://raw.githubusercontent.com/ZaxShen/JobDuck/main/framework/scripts/install.ts | bun run -
+// macOS/Linux: curl -fsSL https://raw.githubusercontent.com/Job-Duck/JobDuck/main/framework/scripts/install.ts | bun run -
+// Windows:     irm https://raw.githubusercontent.com/Job-Duck/JobDuck/main/framework/scripts/install.ts | bun run -
 // Env: JOBDUCK_VERSION (default: latest release), JOBDUCK_CHANNEL (stable, rc or dev; default: stable),
 //      JOBDUCK_INSTALL_DIR (default: ~/.local/bin)
 // Self-contained on purpose: a piped script cannot resolve relative imports.
@@ -10,7 +10,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 
-export const REPO = 'ZaxShen/JobDuck'
+export const REPO = 'Job-Duck/JobDuck'
 const RELEASES = `https://github.com/${REPO}/releases`
 const CHECKSUMS = 'SHA256SUMS'
 const OS_NAMES: Partial<Record<NodeJS.Platform, string>> = { darwin: 'darwin', linux: 'linux', win32: 'windows' }
