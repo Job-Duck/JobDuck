@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import { formatIssues } from '../db/applications'
+import { eventDateMessage, isEventDate } from '../db/dates'
+import { OUTCOME_KINDS } from '../db/outcomes'
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>
 
@@ -16,19 +19,53 @@ export const SyncOutcome = z.looseObject({
   applicationId: Ref,
   jobId: Ref,
   queuedAt: z.string().nullish(),
+  kind: z.enum(OUTCOME_KINDS).nullish(),
+  scheduledAt: z.string().refine(isEventDate, eventDateMessage('scheduledAt')).nullish(),
 })
 export type SyncOutcome = z.infer<typeof SyncOutcome>
 
+export interface InvalidOutcome {
+  messageId: string
+  receivedAt: string
+  error: string
+}
+
 const Failure = z.object({ ok: z.literal(false), error: z.string() })
-const Pending = z.looseObject({ ok: z.literal(true), scriptVersion: z.string(), outcomes: z.array(SyncOutcome) })
+const Pending = z.looseObject({ ok: z.literal(true), scriptVersion: z.string(), outcomes: z.array(z.unknown()) })
 const Acked = z.looseObject({ ok: z.literal(true), acked: z.number() })
 const Status = z.looseObject({ ok: z.literal(true), scriptVersion: z.string(), mode: z.string().optional(), pending: z.number().optional() })
 
-export type PendingResponse = z.infer<typeof Pending>
+export interface PendingResponse {
+  ok: true
+  scriptVersion: string
+  outcomes: SyncOutcome[]
+  invalid: InvalidOutcome[]
+}
 export type StatusResponse = z.infer<typeof Status>
 
 export const ACK_BATCH = 100
 const EXCERPT = 200
+
+const textField = (value: unknown, key: string) => {
+  const field = typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined
+  return typeof field === 'string' ? field : ''
+}
+
+function splitOutcomes(raw: unknown[]): { outcomes: SyncOutcome[]; invalid: InvalidOutcome[] } {
+  const outcomes: SyncOutcome[] = []
+  const invalid: InvalidOutcome[] = []
+  for (const entry of raw) {
+    const parsed = SyncOutcome.safeParse(entry)
+    if (parsed.success) outcomes.push(parsed.data)
+    else {
+      invalid.push({
+        messageId: textField(entry, 'messageId'), receivedAt: textField(entry, 'receivedAt'),
+        error: `invalid outcome: ${formatIssues(parsed.error)}`.slice(0, EXCERPT),
+      })
+    }
+  }
+  return { outcomes, invalid }
+}
 
 export class SyncAuthError extends Error {
   constructor() {
@@ -84,7 +121,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   }
 
   return {
-    pending: () => call('pending', Pending),
+    async pending() {
+      const response = await call('pending', Pending)
+      return { ...response, ...splitOutcomes(response.outcomes) }
+    },
     status: () => call('status', Status),
     async ack(messageIds) {
       let acked = 0

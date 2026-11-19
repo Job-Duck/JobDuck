@@ -55,7 +55,7 @@ test('permissions template parses with every module off and safe defaults', () =
   const permissions = loadPermissions()
   for (const name of MODULES) expect(permissions.modules[name]).toBe(false)
   expect(permissions.apply).toEqual(SAFE_APPLY)
-  expect(permissions.track).toEqual({ sync_url: '', sync_token: '' })
+  expect(permissions.track).toEqual({ sync_url: '', sync_token: '', auto_apply_interview_signals: false })
   expect(permissions.cv).toEqual({ page_limit: 2 })
 })
 
@@ -152,6 +152,18 @@ test('email_codes rejects an unknown value', () => {
 test('the template documents email_codes = "ask" with its options', () => {
   const text = readFileSync(join(import.meta.dir, '..', 'templates', 'permissions.toml'), 'utf8')
   expect(text).toMatch(/^email_codes = "ask" +# ask \| auto_from_mail$/m)
+})
+
+test('auto_apply_interview_signals defaults to false, parses true and keeps its comment through serializePermissions', () => {
+  expect(parsePermissions('').track.auto_apply_interview_signals).toBe(false)
+  const permissions = parsePermissions('[track]\nauto_apply_interview_signals = true\n')
+  expect(permissions.track.auto_apply_interview_signals).toBe(true)
+  const text = serializePermissions(permissions)
+  expect(text).toMatch(/^auto_apply_interview_signals = true {2}# record synced interview/m)
+  expect(parsePermissions(text).track.auto_apply_interview_signals).toBe(true)
+  expect(() => parsePermissions('[track]\nauto_apply_interview_signals = "yes"\n')).toThrow()
+  const template = readFileSync(join(import.meta.dir, '..', 'templates', 'permissions.toml'), 'utf8')
+  expect(template).toMatch(/^auto_apply_interview_signals = false +# record synced interview/m)
 })
 
 test('profile template parses front matter and keeps the body', () => {

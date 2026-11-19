@@ -45,6 +45,7 @@ disability_status = "decline"       # decline | no | yes
 [track]
 sync_url = ""
 sync_token = ""
+auto_apply_interview_signals = false # record synced interview, assessment and offer emails without asking to confirm
 
 [cv]
 page_limit = 2

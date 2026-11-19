@@ -1,10 +1,21 @@
 import { TERMINAL_STATUSES, type Application, type EventSource, getApplication, isTerminal, setStatus } from './applications'
 import { type Db, nowIso, one, transaction } from './client'
+import { type Stage, type StageKind, type StageType, addStage } from './interviews'
 
-export const OUTCOME_STATUSES = ['pending', 'matched', 'needs_match', 'dismissed'] as const
+export const OUTCOME_STATUSES = ['pending', 'matched', 'needs_match', 'awaiting_confirm', 'dismissed'] as const
 export type OutcomeStatus = (typeof OUTCOME_STATUSES)[number]
-export const OUTCOME_KINDS = ['rejection'] as const
+export const SIGNAL_KINDS = ['interview_invite', 'assessment', 'offer'] as const
+export type SignalKind = (typeof SIGNAL_KINDS)[number]
+export const OUTCOME_KINDS = ['rejection', ...SIGNAL_KINDS] as const
 export type OutcomeKind = (typeof OUTCOME_KINDS)[number]
+
+export const isSignalKind = (kind: string): kind is SignalKind => (SIGNAL_KINDS as readonly string[]).includes(kind)
+
+export const SIGNAL_STAGES: Record<SignalKind, { kind: StageKind; stageType: StageType; label: string }> = {
+  interview_invite: { kind: 'interviewing', stageType: 'other', label: 'Interview invite' },
+  assessment: { kind: 'interviewing', stageType: 'online_assessment', label: 'Assessment' },
+  offer: { kind: 'offered', stageType: 'verbal', label: 'Offer' },
+}
 
 export interface Outcome {
   id: number
@@ -21,6 +32,7 @@ export interface Outcome {
   candidates: string | null
   synced_at: string | null
   created_at: string
+  scheduled_at: string | null
 }
 
 export interface OutcomeInput {
@@ -35,11 +47,13 @@ export interface OutcomeInput {
   status: OutcomeStatus
   matched_by?: string | null
   candidates?: unknown
+  scheduled_at?: string | null
 }
 
 export interface MatchResult {
   outcome: Outcome
   application: Application
+  stage?: Stage
 }
 
 export function getOutcome(db: Db, id: number): Outcome | undefined {
@@ -50,13 +64,14 @@ export function insertOutcome(db: Db, input: OutcomeInput): Outcome {
   const candidates = input.candidates === undefined || input.candidates === null ? null : JSON.stringify(input.candidates)
   return transaction(db, () => {
     const inserted = one<Outcome>(db.prepare(`INSERT INTO outcomes
-        (message_id, kind, company, title, job_url, job_ref, received_at, application_id, status, matched_by, candidates, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (message_id, kind, company, title, job_url, job_ref, received_at, application_id, status, matched_by, candidates,
+          scheduled_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (message_id) DO NOTHING
         RETURNING *`),
       input.message_id, input.kind, input.company ?? null, input.title ?? null, input.job_url ?? null,
       input.job_ref ?? null, input.received_at, input.application_id ?? null, input.status,
-      input.matched_by ?? null, candidates, nowIso())
+      input.matched_by ?? null, candidates, input.scheduled_at ?? null, nowIso())
     const row = inserted ?? one<Outcome>(db.prepare('SELECT * FROM outcomes WHERE message_id = ?'), input.message_id)
     if (!row) throw new Error(`outcome ${input.message_id} could not be stored`)
     return row
@@ -72,7 +87,11 @@ export function listOutcomes(db: Db, filter: { status?: OutcomeStatus } = {}): O
 export interface MatchOptions {
   source: EventSource
   matchedBy?: string
+  autoConfirm?: boolean
 }
+
+export const alreadyRecorded = (id: number) => `outcome ${id} is already recorded on its application`
+export const notAwaitingConfirm = (id: number) => `outcome ${id} is not awaiting confirmation`
 
 export function applyOutcomeMatch(db: Db, outcomeId: number, applicationId: number, options: MatchOptions): MatchResult {
   return transaction(db, () => {
@@ -80,6 +99,13 @@ export function applyOutcomeMatch(db: Db, outcomeId: number, applicationId: numb
     if (!outcome) throw new Error(`outcome ${outcomeId} not found`)
     const current = getApplication(db, applicationId)
     if (!current) throw new Error(`application ${applicationId} not found`)
+    if (isSignalKind(outcome.kind)) {
+      if (outcome.status === 'matched') throw new Error(alreadyRecorded(outcomeId))
+      const held = one<Outcome>(db.prepare(`UPDATE outcomes SET status = 'awaiting_confirm', matched_by = ?, application_id = ?
+          WHERE id = ? RETURNING *`), options.matchedBy ?? options.source, applicationId, outcomeId)
+      if (!held) throw new Error(`outcome ${outcomeId} not found`)
+      return options.autoConfirm ? confirmOutcome(db, outcomeId, { source: options.source }) : { outcome: held, application: current }
+    }
     const application = isTerminal(current.status)
       ? current
       : setStatus(db, applicationId, 'deny_by_employer', {
@@ -95,6 +121,29 @@ export function applyOutcomeMatch(db: Db, outcomeId: number, applicationId: numb
 }
 
 export const matchOutcome = applyOutcomeMatch
+
+export function confirmOutcome(db: Db, outcomeId: number, options: { source: EventSource }): MatchResult {
+  return transaction(db, () => {
+    const outcome = getOutcome(db, outcomeId)
+    if (!outcome) throw new Error(`outcome ${outcomeId} not found`)
+    if (!isSignalKind(outcome.kind) || outcome.status !== 'awaiting_confirm' || outcome.application_id === null) {
+      throw new Error(notAwaitingConfirm(outcomeId))
+    }
+    const current = getApplication(db, outcome.application_id)
+    if (!current) throw new Error(`application ${outcome.application_id} not found`)
+    const signal = SIGNAL_STAGES[outcome.kind]
+    const recorded = isTerminal(current.status) ? { application: current } : addStage(db, current.id, {
+      kind: signal.kind,
+      stageType: signal.stageType,
+      scheduledAt: outcome.scheduled_at === null ? null : outcome.scheduled_at.slice(0, 10),
+      note: `${signal.label} email ${outcome.received_at}`,
+      source: options.source,
+    })
+    const updated = one<Outcome>(db.prepare("UPDATE outcomes SET status = 'matched' WHERE id = ? RETURNING *"), outcomeId)
+    if (!updated) throw new Error(`outcome ${outcomeId} not found`)
+    return { outcome: updated, ...recorded }
+  })
+}
 
 export function findOutcomeByMessageId(db: Db, messageId: string): Outcome | undefined {
   return one<Outcome>(db.prepare('SELECT * FROM outcomes WHERE message_id = ?'), messageId)

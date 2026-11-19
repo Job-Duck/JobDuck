@@ -367,6 +367,26 @@ test('outcomes queue: list, match and dismiss', async () => {
   expect((await mutate('POST', '/api/outcomes/999/dismiss')).res.status).toBe(404)
 })
 
+test('an interview outcome: match holds it, confirm needs the dashboard header and records the round', async () => {
+  const signal = insertOutcome(db, {
+    message_id: 'i1', kind: 'interview_invite', company: 'Acme', received_at: '2026-10-01T00:00:00.000Z',
+    status: 'needs_match', scheduled_at: '2026-10-08',
+  })
+  const matched = await mutate('POST', `/api/outcomes/${signal.id}/match`, { application_id: ids.acme })
+  expect(matched.res.status).toBe(200)
+  expect(matched.body.outcome.status).toBe('awaiting_confirm')
+  expect(matched.body.application.status).not.toBe('deny_by_employer')
+  expect((await get('/api/outcomes?status=awaiting_confirm')).body.map((o: any) => o.id)).toEqual([signal.id])
+
+  const unsafe = await fetch(`${dash.url}/api/outcomes/${signal.id}/confirm`, { method: 'POST' })
+  expect(unsafe.status).toBe(403)
+  const confirmed = await mutate('POST', `/api/outcomes/${signal.id}/confirm`)
+  expect(confirmed.res.status).toBe(200)
+  expect(confirmed.body.outcome.status).toBe('matched')
+  expect(confirmed.body.stage).toMatchObject({ stage_type: 'other', scheduled_at: '2026-10-08', source: 'dashboard' })
+  expect((await mutate('POST', `/api/outcomes/${signal.id}/confirm`)).res.status).toBe(409)
+})
+
 test('/api/outcomes returns candidates as an array', async () => {
   const candidates = [{ application_id: ids.acme, company: 'Acme', title: 'AI Engineer', score: 0.5 }]
   insertOutcome(db, {

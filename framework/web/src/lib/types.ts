@@ -99,10 +99,14 @@ export interface StageTypes {
 
 export interface Outcome {
   id: number
+  kind: string
+  status: string
   company: string | null
   title: string | null
   job_ref: string | null
   received_at: string
+  scheduled_at: string | null
+  application_id: number | null
 }
 
 export interface Summary {

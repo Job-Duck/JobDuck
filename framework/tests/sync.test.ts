@@ -41,8 +41,9 @@ afterEach(() => {
   box.cleanup()
 })
 
-function configure(track = true, url = SYNC_URL, token = TOKEN) {
-  writeFileSync(permissionsPath(box.home), `[modules]\ntrack = ${track}\n\n[track]\nsync_url = "${url}"\nsync_token = "${token}"\n`)
+function configure(track = true, url = SYNC_URL, token = TOKEN, autoApply?: boolean) {
+  const auto = autoApply === undefined ? '' : `auto_apply_interview_signals = ${autoApply}\n`
+  writeFileSync(permissionsPath(box.home), `[modules]\ntrack = ${track}\n\n[track]\nsync_url = "${url}"\nsync_token = "${token}"\n${auto}`)
 }
 
 type Reply = Record<string, unknown> | ((body: Recorded['body']) => Response)
@@ -257,11 +258,12 @@ test('--json prints rows and totals', async () => {
     scriptVersion: '4',
     acked: 2,
     totals: {
-      fetched: 2, matched: { total: 1, marker: 0, url: 1, ref: 0, company_title: 0 }, needs_match: 1, known: 0, failed: 0,
+      fetched: 2, matched: { total: 1, marker: 0, url: 1, ref: 0, company_title: 0 }, awaiting_confirm: 0, needs_match: 1,
+      known: 0, failed: 0,
     },
     outcomes: [
-      { messageId: 'm1', receivedAt: '2026-10-01T12:00:00.000Z', company: 'Acme', title: 'AI Engineer', result: 'matched', matchedBy: 'url', applicationId: app.id },
-      { messageId: 'm2', receivedAt: '2026-10-01T12:00:00.000Z', company: 'Nobody', title: null, result: 'needs_match', candidates: [] },
+      { messageId: 'm1', receivedAt: '2026-10-01T12:00:00.000Z', company: 'Acme', title: 'AI Engineer', kind: 'rejection', result: 'matched', matchedBy: 'url', applicationId: app.id },
+      { messageId: 'm2', receivedAt: '2026-10-01T12:00:00.000Z', company: 'Nobody', title: null, kind: 'rejection', result: 'needs_match', candidates: [] },
     ],
   })
 })
@@ -366,4 +368,99 @@ test('every quoted response body is cut to 200 chars', async () => {
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
   })).toBe(1)
   expect(err).toEqual([`sync ack failed: ${cut}`])
+})
+
+test('an interview invite matched on sync waits in awaiting_confirm with its scheduled date and leaves the application', async () => {
+  const app = application('Acme', 'AI Engineer')
+  const before = listEvents(db, app.id).length
+  expect(await run([
+    outcome('m1', { applicationId: app.id, kind: 'interview_invite', scheduledAt: '2026-10-08T15:00:00-07:00' }),
+    outcome('m2', { company: 'Acme', title: 'AI Engineer', kind: 'assessment' }),
+  ], { json: true })).toBe(0)
+  expect(stored('m1')).toMatchObject({
+    kind: 'interview_invite', status: 'awaiting_confirm', matched_by: 'marker', application_id: app.id,
+    scheduled_at: '2026-10-08T15:00:00-07:00',
+  })
+  expect(stored('m2')).toMatchObject({ kind: 'assessment', status: 'awaiting_confirm', matched_by: 'company_title', scheduled_at: null })
+  expect(getApplication(db, app.id)?.status).toBe('applied')
+  expect(listEvents(db, app.id)).toHaveLength(before)
+  const report = JSON.parse(out.join('\n'))
+  expect(report.totals).toMatchObject({ fetched: 2, awaiting_confirm: 2, matched: { total: 0 }, needs_match: 0 })
+  expect(report.outcomes[0]).toMatchObject({
+    kind: 'interview_invite', result: 'awaiting_confirm', scheduledAt: '2026-10-08T15:00:00-07:00', applicationId: app.id,
+  })
+  expect(acks().map((request) => request.body.messageIds)).toEqual([['m1', 'm2']])
+})
+
+test('the summary line counts awaiting_confirm separately, also in a dry run', async () => {
+  const app = application('Acme', 'AI Engineer')
+  const signals = [outcome('m1', { applicationId: app.id, kind: 'offer' }), outcome('m2', { applicationId: app.id })]
+  expect(await run(signals, { dryRun: true })).toBe(0)
+  let text = out.join('\n')
+  expect(text).toContain(`offer: would await confirm on #${app.id} (marker)`)
+  expect(text).toContain(`would match #${app.id} (marker)`)
+  expect(text).toContain('fetched 2 / matched 1 (marker 1, url 0, ref 0, company_title 0) / needs_match 0 / known 0 / awaiting_confirm 1')
+  out = []
+  expect(await run(signals)).toBe(0)
+  text = out.join('\n')
+  expect(text).toContain(`offer: awaiting confirm on #${app.id} (marker)`)
+  expect(text).toContain('/ awaiting_confirm 1')
+})
+
+test('an unmatched interview outcome goes to needs_match and never rejects anything', async () => {
+  const apps = [1, 2].map(() => application('Acme', 'AI Engineer'))
+  expect(await run([outcome('m1', { company: 'Acme', title: 'AI Engineer', kind: 'interview_invite' })])).toBe(0)
+  expect(stored('m1')).toMatchObject({ kind: 'interview_invite', status: 'needs_match' })
+  for (const app of apps) expect(getApplication(db, app.id)?.status).toBe('applied')
+})
+
+test('auto_apply_interview_signals = true confirms matched signals on sync', async () => {
+  configure(true, SYNC_URL, TOKEN, true)
+  const app = application('Acme', 'AI Engineer')
+  expect(await run([
+    outcome('m1', { applicationId: app.id, kind: 'interview_invite', scheduledAt: '2026-10-08T15:00:00Z' }),
+  ], { json: true })).toBe(0)
+  expect(stored('m1')).toMatchObject({ status: 'matched', matched_by: 'marker', application_id: app.id })
+  expect(getApplication(db, app.id)?.status).toBe('interviewing')
+  expect(listEvents(db, app.id).at(-1)).toMatchObject({
+    to_status: 'interviewing', stage_type: 'other', scheduled_at: '2026-10-08', source: 'sync', outcome: 'pending',
+  })
+  expect(JSON.parse(out.join('\n')).totals).toMatchObject({ awaiting_confirm: 0, matched: { total: 1, marker: 1 } })
+})
+
+test('auto_apply_interview_signals defaults to false and holds signals for confirm', async () => {
+  configure(true, SYNC_URL, TOKEN, false)
+  const app = application('Acme', 'AI Engineer')
+  expect(await run([outcome('m1', { applicationId: app.id, kind: 'offer' })])).toBe(0)
+  expect(stored('m1').status).toBe('awaiting_confirm')
+  configure()
+  expect(await run([outcome('m2', { applicationId: app.id, kind: 'offer' })])).toBe(0)
+  expect(stored('m2').status).toBe('awaiting_confirm')
+  expect(getApplication(db, app.id)?.status).toBe('applied')
+})
+
+test('an outcome with an unknown kind or a bad scheduledAt is recorded as failed and the rest still sync', async () => {
+  const app = application('Acme', 'AI Engineer')
+  const bad = [
+    { ...outcome('bad-kind', { company: 'Acme' }), kind: 'promotion' },
+    { ...outcome('bad-date', { company: 'Acme' }), kind: 'interview_invite', scheduledAt: 'next Tuesday' },
+  ] as unknown as SyncOutcome[]
+  expect(await run([...bad, outcome('m1', { applicationId: app.id })], { json: true })).toBe(1)
+  const report = JSON.parse(out.join('\n'))
+  expect(report.totals).toMatchObject({ fetched: 3, failed: 2, matched: { total: 1 } })
+  const failed = report.outcomes.filter((row: { result: string }) => row.result === 'failed')
+  expect(failed.map((row: { messageId: string }) => row.messageId)).toEqual(['bad-kind', 'bad-date'])
+  expect(failed[0].error).toContain('kind')
+  expect(failed[1].error).toContain('scheduledAt')
+  expect(err.join('\n')).toContain('could not read outcome bad-kind')
+  expect(listOutcomes(db).map((row) => row.message_id)).toEqual(['m1'])
+  expect(acks().map((request) => request.body.messageIds)).toEqual([['m1']])
+  expect(getApplication(db, app.id)?.status).toBe('deny_by_employer')
+})
+
+test('an outcome without kind is a rejection', async () => {
+  const app = application('Acme', 'AI Engineer')
+  expect(await run([outcome('m1', { applicationId: app.id, kind: null })])).toBe(0)
+  expect(stored('m1')).toMatchObject({ kind: 'rejection', status: 'matched', scheduled_at: null })
+  expect(getApplication(db, app.id)?.status).toBe('deny_by_employer')
 })

@@ -24,6 +24,7 @@ import { ApplicationList } from '@/views/applications/application-list'
 import { ApplicationSheet } from '@/views/applications/application-sheet'
 import { FollowUpsCard } from '@/views/applications/follow-ups-card'
 import { OutcomeItem } from '@/views/applications/outcome-item'
+import { SignalItem } from '@/views/applications/signal-item'
 import { SelectionToolbar } from '@/views/applications/selection-toolbar'
 import { StatusDialog, type StatusDialogRequest, sendStatus } from '@/views/applications/status-dialog'
 
@@ -109,6 +110,7 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
   const [failed, setFailed] = useState(false)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [outcomes, setOutcomes] = useState<Outcome[]>([])
+  const [signals, setSignals] = useState<Outcome[]>([])
   const [followUps, setFollowUps] = useState<FollowUps | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null)
@@ -124,14 +126,16 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
   const refresh = useCallback(async () => {
     try {
       void fetchJSON<FollowUps>(FOLLOW_UPS_PATH).then(setFollowUps, () => setFollowUps(null))
-      const [nextSummary, nextRows, nextOutcomes] = await Promise.all([
+      const [nextSummary, nextRows, nextOutcomes, nextSignals] = await Promise.all([
         fetchJSON<Summary>('/api/summary'),
         fetchJSON<ApplicationRow[]>(applicationsPath({ status: filter, q, limit: APPLICATIONS_FETCH_LIMIT })),
         fetchJSON<Outcome[]>('/api/outcomes?status=needs_match'),
+        fetchJSON<Outcome[]>('/api/outcomes?status=awaiting_confirm'),
       ])
       setSummary(nextSummary)
       setRows(nextRows)
       setOutcomes(nextOutcomes)
+      setSignals(nextSignals)
       setLoaded(true)
       setFailed(false)
     } catch {
@@ -405,10 +409,21 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
         </div>
       )}
 
+      {signals.length > 0 && (
+        <SectionCard
+          title="Possible Updates"
+          description="Interview, assessment and offer emails matched to an application. Confirm records the round; Dismiss drops the email."
+        >
+          <ul>
+            {signals.map((outcome) => <SignalItem key={outcome.id} outcome={outcome} onChanged={refresh} />)}
+          </ul>
+        </SectionCard>
+      )}
+
       {outcomes.length > 0 && (
         <SectionCard
           title="Needs A Match"
-          description="Rejection emails that could not be matched to an application automatically."
+          description="Emails that could not be matched to an application automatically."
         >
           <ul>
             {outcomes.map((outcome) => <OutcomeItem key={outcome.id} outcome={outcome} onChanged={refresh} />)}
