@@ -1,20 +1,14 @@
 import { useRef, useState } from 'react'
-import { PencilIcon, Undo2Icon } from 'lucide-react'
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
-  AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { PencilIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import type { SaveResult } from '@/lib/api'
-import { statusLabel } from '@/lib/format'
 import { dateInputValue, scheduledLabel } from '@/lib/stages'
-import {
-  type EntryDraft, effectiveDate, entryDraft, entryPatch, isEditableEntry, isEntryDate, revertsTo,
-} from '@/lib/status-entries'
+import { type EntryDraft, effectiveDate, entryDraft, entryPatch, isEditableEntry, isEntryDate } from '@/lib/status-entries'
 import type { ApplicationEvent } from '@/lib/types'
+import { UndoEntryButton } from '@/views/applications/undo-entry-button'
 
 interface TimelineEntryProps {
   event: ApplicationEvent
@@ -27,7 +21,6 @@ interface TimelineEntryProps {
 
 export function TimelineEntry({ event, label, undoable, openVersion, onSave, onUndo }: TimelineEntryProps) {
   const [draft, setDraft] = useState<EntryDraft | null>(null)
-  const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const expected = useRef<() => string>(() => '')
   const original = entryDraft(event, dateInputValue)
@@ -55,11 +48,7 @@ export function TimelineEntry({ event, label, undoable, openVersion, onSave, onU
             <Button type="button" variant="ghost" size="icon-sm" aria-label="Edit entry" onClick={edit}>
               <PencilIcon />
             </Button>
-            {undoable && (
-              <Button type="button" variant="ghost" size="icon-sm" aria-label="Undo entry" onClick={() => setConfirming(true)}>
-                <Undo2Icon />
-              </Button>
-            )}
+            {undoable && <UndoEntryButton event={event} label={label} onUndo={onUndo} />}
           </div>
         )}
       </div>
@@ -97,25 +86,6 @@ export function TimelineEntry({ event, label, undoable, openVersion, onSave, onU
           <p className="text-xs text-muted-foreground">{scheduledLabel(effectiveDate(event))} · {event.source}</p>
         </>
       )}
-      <AlertDialog open={confirming} onOpenChange={setConfirming}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Undo This Entry?</AlertDialogTitle>
-            <AlertDialogDescription>
-              <span className="capitalize">{label}</span> is removed and the status goes back to {statusLabel(revertsTo(event) ?? '')}.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => { void onUndo().then((result) => { if (result !== 'failed') setConfirming(false) }) }}
-            >
-              Undo
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </li>
   )
 }

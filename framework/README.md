@@ -13,7 +13,7 @@ The installer is a TypeScript script run by [Bun](https://bun.sh), so install Bu
 macOS and Linux (arm64 or x64):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ZaxShen/JobDuck/dev/framework/scripts/install.ts | bun run -
+curl -fsSL https://raw.githubusercontent.com/Job-Duck/JobDuck/dev/framework/scripts/install.ts | bun run -
 mkdir ~/JobDuck && cd ~/JobDuck
 jobduck init
 ```
@@ -21,12 +21,12 @@ jobduck init
 Windows (x64), in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/ZaxShen/JobDuck/dev/framework/scripts/install.ts | bun run -
+irm https://raw.githubusercontent.com/Job-Duck/JobDuck/dev/framework/scripts/install.ts | bun run -
 ```
 
-The installer downloads the binary for your platform from [GitHub Releases](https://github.com/ZaxShen/JobDuck/releases), checks it against the release's `SHA256SUMS`, and puts it in `~/.local/bin` (`jobduck.exe` on Windows) without root or admin rights. `JOBDUCK_VERSION=0.1.0` pins a version; `JOBDUCK_CHANNEL=rc` or `JOBDUCK_CHANNEL=dev` installs from a [prerelease channel](#release-channels); `JOBDUCK_INSTALL_DIR=<dir>` picks another directory.
+The installer downloads the binary for your platform from [GitHub Releases](https://github.com/Job-Duck/JobDuck/releases), checks it against the release's `SHA256SUMS`, and puts it in `~/.local/bin` (`jobduck.exe` on Windows) without root or admin rights. `JOBDUCK_VERSION=0.1.0` pins a version; `JOBDUCK_CHANNEL=rc` or `JOBDUCK_CHANNEL=dev` installs from a [prerelease channel](#release-channels); `JOBDUCK_INSTALL_DIR=<dir>` picks another directory.
 
-Without Bun: download the binary for your platform (for example `jobduck-windows-x64.exe`) from [Releases](https://github.com/ZaxShen/JobDuck/releases), rename it to `jobduck` (`jobduck.exe` on Windows), make it executable on macOS and Linux, and put it in a directory on your `PATH`.
+Without Bun: download the binary for your platform (for example `jobduck-windows-x64.exe`) from [Releases](https://github.com/Job-Duck/JobDuck/releases), rename it to `jobduck` (`jobduck.exe` on Windows), make it executable on macOS and Linux, and put it in a directory on your `PATH`.
 
 Then:
 

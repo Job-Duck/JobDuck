@@ -90,7 +90,7 @@ function outcome(id, receivedAt) {
 
   const pending = post(api, { token: TOKEN, action: 'pending' });
   check('pending responds as JSON', pending.mime === 'application/json');
-  check('pending returns outcomes sorted by receivedAt', pending.json.ok === true && pending.json.scriptVersion === '5.6' &&
+  check('pending returns outcomes sorted by receivedAt', pending.json.ok === true && pending.json.scriptVersion === '5.7' &&
     pending.json.outcomes.map((o) => o.messageId).join(',') === '<a@x>,<b@x>,<c@x>', pending.json);
 
   const ack = post(api, { token: TOKEN, action: 'ack', messageIds: ['<a@x>', '<c@x>', '<unknown@x>'] });
@@ -98,13 +98,13 @@ function outcome(id, receivedAt) {
   check('ack removes exactly the given ids', ack.json.ok === true && ack.json.acked === 2 && left.join(',') === '<b@x>', { ack: ack.json, left });
 
   const status = post(api, { token: TOKEN, action: 'status' });
-  check('status reports mode and pending', status.json.ok === true && status.json.mode === 'serve' && status.json.pending === 1 && status.json.scriptVersion === '5.6', status.json);
+  check('status reports mode and pending', status.json.ok === true && status.json.mode === 'serve' && status.json.pending === 1 && status.json.scriptVersion === '5.7', status.json);
 
   check('bad action → bad_request', post(api, { token: TOKEN, action: 'delete-all' }).json.error === 'bad_request');
   check('ack without messageIds → bad_request', post(api, { token: TOKEN, action: 'ack' }).json.error === 'bad_request');
 
   const page = api.doGet({ parameter: { token: TOKEN } }).getContent();
-  check('doGet is a one-line page without outcome data or token', page === 'Job Duck Gmail script v5.6 — POST only' && !page.includes('<b@x>') && !page.includes(TOKEN), page);
+  check('doGet is a one-line page without outcome data or token', page === 'Job Duck Gmail script v5.7 — POST only' && !page.includes('<b@x>') && !page.includes(TOKEN), page);
 }
 
 {
@@ -138,6 +138,19 @@ function outcome(id, receivedAt) {
   const raw = scriptStore.data['outcome:<long@x>'];
   const v = JSON.parse(raw);
   check('subject/title truncated to 200 and value under 8 KB', v.subject.length === 200 && v.title.length === 200 && raw.length < 8192);
+}
+
+{
+  const { api } = load({ SYNC_TOKEN: TOKEN });
+  api.queueOutcome_(outcome('<rej@x>', '2026-10-01T00:00:00.000Z'));
+  api.queueOutcome_(Object.assign(outcome('<inv@x>', '2026-10-02T00:00:00.000Z'), { kind: 'interview_invite', scheduledAt: '2026-10-09T14:00' }));
+  api.queueOutcome_(Object.assign(outcome('<off@x>', '2026-10-03T00:00:00.000Z'), { kind: 'offer' }));
+  api.queueOutcome_(Object.assign(outcome('<bad@x>', '2026-10-04T00:00:00.000Z'), { kind: 'party' }));
+  const served = post(api, { token: TOKEN, action: 'pending' }).json.outcomes;
+  const byId = Object.fromEntries(served.map((o) => [o.messageId, o]));
+  check('pending serves a signal with kind and scheduledAt', byId['<inv@x>'].kind === 'interview_invite' && byId['<inv@x>'].scheduledAt === '2026-10-09T14:00', byId['<inv@x>']);
+  check('a signal without a stated date serves scheduledAt null', byId['<off@x>'].kind === 'offer' && byId['<off@x>'].scheduledAt === null, byId['<off@x>']);
+  check('a rejection, or an unknown kind, is served without kind or scheduledAt', ['<rej@x>', '<bad@x>'].every((id) => !('kind' in byId[id]) && !('scheduledAt' in byId[id])), served);
 }
 
 {
