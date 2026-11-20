@@ -46,6 +46,10 @@ export function isEntryDate(value: string): boolean {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }
 
+const UNDATED_CHOICES: readonly string[] = ['no_response']
+
+export const needsDate = (scope: DialogScope, choice: string) => scope.stageKind !== null || !UNDATED_CHOICES.includes(choice)
+
 export interface StatusEntry {
   choice: string
   date: string
@@ -59,7 +63,8 @@ export interface StatusRequest {
 }
 
 export function statusRequest(applicationId: number, scope: DialogScope, entry: StatusEntry, expected: string): StatusRequest {
-  if (!isEntryDate(entry.date)) throw new Error('Pick the date it happened.')
+  const dated = needsDate(scope, entry.choice)
+  if (dated && !isEntryDate(entry.date)) throw new Error('Pick the date it happened.')
   const note = entry.note.trim() === '' ? {} : { note: entry.note }
   if (scope.stageKind !== null) {
     return {
@@ -71,7 +76,7 @@ export function statusRequest(applicationId: number, scope: DialogScope, entry: 
   return {
     method: 'PATCH',
     path: `/api/applications/${applicationId}`,
-    body: { status: entry.choice, occurred_at: entry.date, ...note, expected_updated_at: expected },
+    body: { status: entry.choice, ...(dated ? { occurred_at: entry.date } : {}), ...note, expected_updated_at: expected },
   }
 }
 

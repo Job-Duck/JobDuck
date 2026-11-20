@@ -85,7 +85,7 @@ const ADVANCE: Record<string, StatusAction> = {
 const CLOSE: readonly StatusAction[] = [
   { label: 'Reject', target: 'deny_by_employer', hint: `The employer turned you down; you pick the date. ${HIDDEN_HINT}` },
   { label: 'Withdraw', target: 'deny_by_candidate', hint: `You withdrew or declined; you pick the date. ${HIDDEN_HINT}` },
-  { label: 'No response', target: 'no_response', hint: `The employer never replied; you pick the date. ${HIDDEN_HINT}` },
+  { label: 'No response', target: 'no_response', hint: `The employer never replied; no date needed. ${HIDDEN_HINT}` },
 ]
 
 const CLOSED_TARGETS = new Set(['accepted', ...CLOSE.map((action) => action.target)])

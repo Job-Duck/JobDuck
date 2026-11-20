@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { errorMessage, patchJSON, postJSON } from '@/lib/api'
 import { stageTypeLabel } from '@/lib/stages'
 import {
-  type DialogScope, type StatusEntry, type StatusRequest, dialogScope, entryLabel, isEntryDate,
+  type DialogScope, type StatusEntry, type StatusRequest, dialogScope, entryLabel, isEntryDate, needsDate,
 } from '@/lib/status-entries'
 import type { StageTypes } from '@/lib/types'
 import { Choice } from '@/views/applications/stage-fields'
@@ -58,7 +58,8 @@ function StatusForm({ request, scope, onSubmit }: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const stage = scope.stageKind !== null
-  const ready = entry.choice !== '' && isEntryDate(entry.date)
+  const dated = needsDate(scope, entry.choice)
+  const ready = entry.choice !== '' && (!dated || isEntryDate(entry.date))
   const set = (patch: Partial<StatusEntry>) => setEntry((current) => ({ ...current, ...patch }))
 
   const submit = async () => {
@@ -79,7 +80,8 @@ function StatusForm({ request, scope, onSubmit }: {
       <DialogHeader>
         <DialogTitle>{request.title}</DialogTitle>
         <DialogDescription>
-          {request.subject}. {stage ? 'Pick the round and the date it happened or is scheduled.' : 'Pick the date it happened.'}
+          {request.subject}.
+          {' '}{stage ? 'Pick the round and the date it happened or is scheduled.' : dated ? 'Pick the date it happened.' : 'No date is needed.'}
           {' '}The note is optional.
         </DialogDescription>
       </DialogHeader>
@@ -92,16 +94,18 @@ function StatusForm({ request, scope, onSubmit }: {
           format={stage ? stageTypeLabel : entryLabel}
           onChange={(choice) => set({ choice })}
         />
-        <div className="space-y-1.5">
-          <Label htmlFor="status-entry-date" className="text-muted-foreground">Date</Label>
-          <Input
-            id="status-entry-date"
-            type="date"
-            required
-            value={entry.date}
-            onChange={(event) => set({ date: event.target.value })}
-          />
-        </div>
+        {dated && (
+          <div className="space-y-1.5">
+            <Label htmlFor="status-entry-date" className="text-muted-foreground">Date</Label>
+            <Input
+              id="status-entry-date"
+              type="date"
+              required
+              value={entry.date}
+              onChange={(event) => set({ date: event.target.value })}
+            />
+          </div>
+        )}
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="status-entry-note" className="text-muted-foreground">Note</Label>

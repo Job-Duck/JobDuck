@@ -256,7 +256,7 @@ export function ApplicationsView({ active, statuses, terminal }: ApplicationsVie
   }
 
   const bulkSetStatus = (status: string) => setDialog({
-    request: { target: status, title: 'Set Status', subject: 'One date and note for every selected application', bulk: true },
+    request: { target: status, title: 'Set Status', subject: 'Applies to every selected application', bulk: true },
     rows: selectedRows,
   })
 

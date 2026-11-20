@@ -48,14 +48,21 @@ describe('statusActions', () => {
     }
   })
 
-  test('every hint says you pick the date and none implies today', () => {
+  test('every dated hint says you pick the date and none implies today', () => {
     for (const status of APPLICATION_STATUSES) {
       const { advance, close } = statusActions(status)
       for (const action of [...advance, ...close]) {
+        if (action.target === 'no_response') continue
         expect(action.hint).toContain('pick')
         expect(action.hint.toLowerCase()).not.toContain('today')
       }
     }
+  })
+
+  test('the No response hint does not ask for a date', () => {
+    const noResponse = statusActions('applied').close.find((action) => action.target === 'no_response')
+    expect(noResponse?.hint).toContain('no date needed')
+    expect(noResponse?.hint).not.toContain('pick')
   })
 
   test('applied moves to interviewing', () => {
