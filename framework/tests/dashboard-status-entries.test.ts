@@ -9,7 +9,7 @@ import { upsertPosting } from '../src/db/postings'
 import { statusActions } from '../web/src/lib/board'
 import {
   BULK_TARGETS, CLOSE_TARGETS, type DialogScope, type TimelineItem, dialogScope, effectiveDate, entryDraft, entryLabel,
-  entryPatch, groupLatest, groupNote, groupTimeline, isEntryDate, isTimelineGroup, itemHolds, revertsTo, statusRequest,
+  entryPatch, groupLatest, groupNote, groupTimeline, isEntryDate, isTimelineGroup, itemHolds, needsDate, revertsTo, statusRequest,
   timelineLabel, timelineOrder, undoableEntryId,
 } from '../web/src/lib/status-entries'
 import type { ApplicationEvent, StageTypes } from '../web/src/lib/types'
@@ -88,6 +88,24 @@ describe('statusRequest', () => {
     expect(() => statusRequest(7, status, { choice: 'applied', date: '', note: '' }, 'v1')).toThrow('Pick the date')
     expect(() => statusRequest(7, stage, { choice: 'technical', date: '2026-02-30', note: '' }, 'v1')).toThrow('Pick the date')
   })
+
+  test('No response needs no date and leaves occurred_at out; the other close targets still need one', () => {
+    const close = dialogScope('no_response', types)
+    expect(needsDate(close, 'no_response')).toBe(false)
+    expect(statusRequest(7, close, { choice: 'no_response', date: '', note: '' }, 'v1')).toEqual({
+      method: 'PATCH', path: '/api/applications/7', body: { status: 'no_response', expected_updated_at: 'v1' },
+    })
+    expect(statusRequest(7, close, { choice: 'no_response', date: '', note: 'Ghosted' }, 'v1').body).not.toHaveProperty('occurred_at')
+    for (const choice of ['deny_by_employer', 'deny_by_candidate']) {
+      expect(needsDate(close, choice)).toBe(true)
+      expect(() => statusRequest(7, close, { choice, date: '', note: '' }, 'v1')).toThrow('Pick the date')
+    }
+    const bulk = dialogScope('applied', types, true)
+    expect(needsDate(bulk, 'no_response')).toBe(false)
+    expect(statusRequest(7, bulk, { choice: 'no_response', date: '', note: '' }, 'v1').body).not.toHaveProperty('occurred_at')
+    expect(needsDate(bulk, 'applied')).toBe(true)
+    expect(() => statusRequest(7, bulk, { choice: 'applied', date: '', note: '' }, 'v1')).toThrow('Pick the date')
+  })
 })
 
 describe('timeline helpers', () => {
@@ -143,6 +161,13 @@ describe('timeline helpers', () => {
     expect(entryPatch(original, { date: '2026-03-02', note: 'Old' })).toEqual({ occurred_at: '2026-03-02' })
     expect(entryPatch(original, { date: '2026-03-01', note: ' ' })).toEqual({ note: null })
     expect(entryPatch(original, { date: '', note: 'New' })).toBeNull()
+  })
+
+  test('editing the note of an undated No response entry sends only the note', () => {
+    const silent = event(2, { from_status: 'applied', to_status: 'no_response' })
+    const original = entryDraft(silent, (value) => value.slice(0, 10))
+    expect(original).toEqual({ date: '2026-01-01', note: '' })
+    expect(entryPatch(original, { ...original, note: 'Never heard back' })).toEqual({ note: 'Never heard back' })
   })
 })
 
@@ -286,6 +311,16 @@ describe('requests the dialog builds are accepted by the API', () => {
     expect(undo).toBe(denied.id)
     expect(call('DELETE', `/api/events/${undo}`, { expected_updated_at: getApplication(db, id)!.updated_at }).status).toBe(200)
     expect(getApplication(db, id)!.status).toBe('interviewing')
+  })
+
+  test('No response from the close dialog is accepted without a date', () => {
+    const posting = upsertPosting(db, { source: 'manual', url: 'https://acme.com/jobs/4', title: 'Engineer', company: 'Acme' })
+    const { id } = createApplication(db, { postingId: posting.id, status: 'applied' })
+    const request = statusRequest(id, dialogScope('no_response', types), { choice: 'no_response', date: '', note: '' },
+      getApplication(db, id)!.updated_at)
+    expect(call(request.method, request.path, request.body).status).toBe(200)
+    expect(getApplication(db, id)!.status).toBe('no_response')
+    expect(listEvents(db, id).at(-1)).toMatchObject({ to_status: 'no_response', occurred_at: null })
   })
 
   test('a bulk status change to interviewing PATCHes with occurred_at', () => {

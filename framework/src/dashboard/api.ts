@@ -106,6 +106,7 @@ const stagePatchSchema = z.object({ ...versioned, stage_type: z.enum(STAGE_TYPES
 const eventPatchSchema = z.object({ ...versioned, occurred_at: z.string().max(40).optional(), note: text(20_000) }).strict()
 
 export const OCCURRED_AT_REQUIRED = 'occurred_at is required when changing status'
+const UNDATED_STATUSES: readonly string[] = ['pending', 'no_response']
 
 const matchSchema = z.object({ application_id: z.number().int().positive() }).strict()
 
@@ -264,7 +265,7 @@ function patchApplication(db: Db, id: number, body: unknown) {
     const current = currentApplication(db, id, expected)
     const changing = input.status !== undefined
       && (input.status !== current.status || (input.status === 'pending' && input.pending_reason !== current.pending_reason))
-    if (changing && input.status !== 'pending' && input.occurred_at === undefined) throw new ApiError(400, OCCURRED_AT_REQUIRED)
+    if (changing && !UNDATED_STATUSES.includes(input.status!) && input.occurred_at === undefined) throw new ApiError(400, OCCURRED_AT_REQUIRED)
     const fields = Object.fromEntries(Object.entries(input)
       .filter(([key, value]) => key !== 'status' && key !== 'pending_reason' && key !== 'occurred_at'
         && !(key === 'note' && changing) && value !== undefined)) as ApplicationFields

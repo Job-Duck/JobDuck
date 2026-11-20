@@ -222,6 +222,22 @@ test('PATCH status without occurred_at gets 400 except for pending, and a bad da
   expect(reason.body.pending_reason).toBe('Upload the transcript.')
 })
 
+test('PATCH to no_response needs no occurred_at, but other close statuses still do', async () => {
+  const denied = await mutate('PATCH', `/api/applications/${ids.acme}`, { status: 'deny_by_employer' })
+  expect(denied.res.status).toBe(400)
+  expect(denied.body.error).toBe('occurred_at is required when changing status')
+  expect(getApplication(db, ids.acme)?.status).toBe('applied')
+  const silent = await mutate('PATCH', `/api/applications/${ids.acme}`, { status: 'no_response', note: 'Never heard back' })
+  expect(silent.res.status).toBe(200)
+  expect(silent.body.status).toBe('no_response')
+  expect(listEvents(db, ids.acme).at(-1)).toMatchObject({
+    from_status: 'applied', to_status: 'no_response', note: 'Never heard back', occurred_at: null,
+  })
+  const badDate = await mutate('PATCH', `/api/applications/${ids.beta}`, { status: 'no_response', occurred_at: '2026-13-45' })
+  expect(badDate.res.status).toBe(400)
+  expect(badDate.body.error).toContain('occurred_at must be an ISO date')
+})
+
 test('PATCH backwards, to the same status, a second applied or out of a closed status gets 400', async () => {
   const back = await mutate('PATCH', `/api/applications/${ids.gamma}`, { status: 'applied', occurred_at: '2026-04-01' })
   expect(back.res.status).toBe(400)
